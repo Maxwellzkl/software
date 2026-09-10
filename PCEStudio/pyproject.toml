@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pce-studio"
+version = "1.0.0"
+description = "Keysight B2902B dual-channel photovoltaic I-V measurement software"
+requires-python = ">=3.11"
+dependencies = [
+  "matplotlib>=3.8,<4",
+  "numpy>=1.26,<3",
+  "openpyxl>=3.1,<4",
+  "PySide6>=6.7,<7",
+  "PyVISA>=1.14,<2",
+]
+
+[project.scripts]
+pce-studio = "pce_app.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["pce_app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
