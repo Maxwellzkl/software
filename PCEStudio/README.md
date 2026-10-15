@@ -12,6 +12,7 @@
 - 正扫、反扫、正反扫；B2902B 内部 LIST 扫描完成一个扫向后立即更新曲线。
 - 长时间 LIST 扫描通过 VISA 状态字节轮询等待完成，避免 Normal/Long 档在点数较多时被固定通信超时误判为失败。
 - 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、两种测量量程、Measure Delay 和 Measure Speed；所有数值参数在界面显示对应单位。
+- 所有下拉框和数值输入框均禁止用鼠标滚轮改值；鼠标滚轮只滚动参数页面，避免悬停误操作。
 - Measure Speed 提供 Auto、Short、Medium、Normal、Long、Manual 六档，默认 Normal；Manual 可自定义 NPLC。
 - Source Range 提供 B2902B 对应固定量程；Voltage/Current Measure Range 提供 Auto、Fixed、Limited 三种模式。由于软件只使用 DC，未列入仅脉冲模式可用的 10 A 档。
 - 根据 Start、Stop 和 VAR1 Count 实时显示正扫/反扫步长。
@@ -19,6 +20,7 @@
 - Dark 数据只保存和绘图，不计算光伏性能。
 - 器件编号和面积保存至本机数据库；历史测试曲线可勾选叠加比较。
 - IV 图为右侧主工作区；器件配置采用紧凑卡片，结果与历史曲线使用底部标签页切换。
+- 窗口初始尺寸会按屏幕可用区域自动适配，参数栏宽度保持在紧凑范围；小屏幕可通过左侧滚动条查看全部参数。
 - 原始文件名为 `器件编号_light或dark_Point.csv`，重名时自动添加 `_002` 等序号。
 - 数据输出目录可直接输入，也可点击“选择…”打开 Windows 目录选择窗口。
 - “结束并导出统计”生成 `output_file_年月日_时分秒.xlsx`。

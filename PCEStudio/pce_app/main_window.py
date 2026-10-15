@@ -7,8 +7,9 @@ from pathlib import Path
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase
+from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QWheelEvent
 from PySide6.QtWidgets import (
+    QAbstractScrollArea,
     QAbstractItemView,
     QApplication,
     QCheckBox,
@@ -117,13 +118,34 @@ def _double_spin(
     decimals: int = 6,
     suffix: str = "",
 ) -> QDoubleSpinBox:
-    widget = QDoubleSpinBox()
+    widget = NoWheelDoubleSpinBox()
     widget.setRange(minimum, maximum)
     widget.setDecimals(decimals)
     widget.setValue(value)
     widget.setSuffix(suffix)
     widget.setKeyboardTracking(False)
     return widget
+
+
+class NoWheelComboBox(QComboBox):
+    """A combo box whose closed value cannot be changed by the mouse wheel."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt override
+        event.ignore()
+
+
+class NoWheelSpinBox(QSpinBox):
+    """A spin box whose value cannot be changed by the mouse wheel."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt override
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """A double spin box whose value cannot be changed by the mouse wheel."""
+
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 - Qt override
+        event.ignore()
 
 
 class DevicePanel(QGroupBox):
@@ -133,14 +155,14 @@ class DevicePanel(QGroupBox):
         super().__init__(f"CH{channel} 器件 / 像素")
         self.channel = channel
         self.database = database
-        self.profile_combo = QComboBox()
+        self.profile_combo = NoWheelComboBox()
         self.profile_combo.currentIndexChanged.connect(self._profile_selected)
         self.device_edit = QLineEdit()
         self.device_edit.setPlaceholderText("例如 Device01")
         self.point_edit = QLineEdit("1")
         self.point_edit.setPlaceholderText("例如 1")
         self.area_spin = _double_spin(0.000001, 10000.0, 0.04, 6, " cm²")
-        self.condition_combo = QComboBox()
+        self.condition_combo = NoWheelComboBox()
         self.condition_combo.addItem("Light", "light")
         self.condition_combo.addItem("Dark", "dark")
 
@@ -230,8 +252,12 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PCE Studio - Keysight B2902B")
-        self.resize(1600, 980)
-        self.setMinimumSize(1200, 780)
+        self.setMinimumSize(820, 560)
+        available = QApplication.primaryScreen().availableGeometry()
+        self.resize(
+            min(1600, max(self.minimumWidth(), available.width() - 64)),
+            min(980, max(self.minimumHeight(), available.height() - 64)),
+        )
         self.setStyleSheet(APP_STYLE)
 
         self.database = Database()
@@ -251,13 +277,20 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.refresh_resources)
 
     def _build_ui(self) -> None:
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self._build_main_panel())
-        splitter.setSizes([420, 1180])
-        splitter.setCollapsible(0, False)
-        splitter.setCollapsible(1, False)
-        self.setCentralWidget(splitter)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.left_panel = self._build_left_panel()
+        self.left_panel.setMinimumWidth(350)
+        self.left_panel.setMaximumWidth(420)
+        main_panel = self._build_main_panel()
+        main_panel.setMinimumWidth(450)
+        self.main_splitter.addWidget(self.left_panel)
+        self.main_splitter.addWidget(main_panel)
+        self.main_splitter.setSizes([400, 1200])
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setCollapsible(0, False)
+        self.main_splitter.setCollapsible(1, False)
+        self.setCentralWidget(self.main_splitter)
         self.statusBar().showMessage("就绪")
         author = QLabel(
             f'created by ZKL&nbsp;&nbsp;·&nbsp;&nbsp;<a href="{GITHUB_URL}">GitHub</a>'
@@ -277,6 +310,7 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         scroll = QScrollArea()
+        self.parameter_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -289,7 +323,7 @@ class MainWindow(QMainWindow):
 
     def _connection_group(self) -> QGroupBox:
         group = QGroupBox("USB VISA 连接")
-        self.resource_combo = QComboBox()
+        self.resource_combo = NoWheelComboBox()
         self.resource_combo.currentIndexChanged.connect(self._resource_changed)
         self.refresh_button = QPushButton("自动枚举")
         self.connect_button = QPushButton("连接并识别")
@@ -310,10 +344,10 @@ class MainWindow(QMainWindow):
 
     def _mode_group(self) -> QGroupBox:
         group = QGroupBox("通道模式")
-        self.channel_mode_combo = QComboBox()
+        self.channel_mode_combo = NoWheelComboBox()
         self.channel_mode_combo.addItem("单通道", "single")
         self.channel_mode_combo.addItem("双通道同步", "dual")
-        self.single_channel_combo = QComboBox()
+        self.single_channel_combo = NoWheelComboBox()
         self.single_channel_combo.addItem("CH1", 1)
         self.single_channel_combo.addItem("CH2", 2)
         self.channel_mode_combo.currentIndexChanged.connect(self._update_mode_visibility)
@@ -326,23 +360,23 @@ class MainWindow(QMainWindow):
     def _sweep_group(self) -> QGroupBox:
         group = QGroupBox("共享扫描参数（CH1 / CH2）")
         layout = QFormLayout(group)
-        self.source_function_combo = QComboBox()
+        self.source_function_combo = NoWheelComboBox()
         self.source_function_combo.addItem("VAR1")
-        self.source_mode_combo = QComboBox()
+        self.source_mode_combo = NoWheelComboBox()
         self.source_mode_combo.addItem("V - 电压源", "VOLT")
         self.source_mode_combo.addItem("I - 电流源", "CURR")
         self.source_mode_combo.currentIndexChanged.connect(self._source_mode_changed)
-        self.shape_combo = QComboBox()
+        self.shape_combo = NoWheelComboBox()
         self.shape_combo.addItem("DC")
         self.source_delay_spin = _double_spin(0.0, 1000.0, 0.0, 6, " s")
-        self.scan_plan_combo = QComboBox()
+        self.scan_plan_combo = NoWheelComboBox()
         self.scan_plan_combo.addItem("正扫", "forward")
         self.scan_plan_combo.addItem("反扫", "reverse")
         self.scan_plan_combo.addItem("正扫 + 反扫", "both")
         self.scan_plan_combo.setCurrentIndex(2)
         self.start_spin = _double_spin(-210.0, 210.0, -0.2, 6)
         self.stop_spin = _double_spin(-210.0, 210.0, 1.2, 6)
-        self.count_spin = QSpinBox()
+        self.count_spin = NoWheelSpinBox()
         self.count_spin.setRange(2, 100000)
         self.count_spin.setValue(71)
         self.step_label = QLabel()
@@ -352,11 +386,11 @@ class MainWindow(QMainWindow):
         self.compliance_label = QLabel("电流 Compliance")
         self.compliance_spin = _double_spin(1e-9, 210.0, 0.1, 9)
 
-        self.source_range_combo = QComboBox()
+        self.source_range_combo = NoWheelComboBox()
 
         self.measure_voltage_check = QCheckBox("启用")
         self.measure_voltage_check.setChecked(True)
-        self.voltage_range_combo = QComboBox()
+        self.voltage_range_combo = NoWheelComboBox()
         self._populate_measure_range(self.voltage_range_combo, VOLTAGE_RANGES)
         voltage_row = self._measure_range_row(
             self.measure_voltage_check, self.voltage_range_combo
@@ -364,13 +398,13 @@ class MainWindow(QMainWindow):
 
         self.measure_current_check = QCheckBox("启用")
         self.measure_current_check.setChecked(True)
-        self.current_range_combo = QComboBox()
+        self.current_range_combo = NoWheelComboBox()
         self._populate_measure_range(self.current_range_combo, CURRENT_RANGES)
         current_row = self._measure_range_row(
             self.measure_current_check, self.current_range_combo
         )
         self.measure_delay_spin = _double_spin(0.0, 1000.0, 0.0, 6, " s")
-        self.measure_speed_combo = QComboBox()
+        self.measure_speed_combo = NoWheelComboBox()
         for label, value in MEASURE_SPEEDS:
             self.measure_speed_combo.addItem(label, value)
         self.measure_speed_combo.setCurrentIndex(
@@ -537,6 +571,9 @@ class MainWindow(QMainWindow):
             ["通道", "结果", "PCE (%)", "Voc (V)", "Jsc (mA/cm²)", "FF (%)", "Pmax (mW/cm²)"]
         )
         self.result_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.result_table.setSizeAdjustPolicy(
+            QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
         self.result_table.horizontalHeader().setStretchLastSection(True)
         result_layout.addWidget(self.result_table)
 
