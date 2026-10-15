@@ -10,6 +10,7 @@
 - 单通道模式可选择 CH1 或 CH2；双通道模式同步测量两个独立器件/像素。
 - 双通道共享扫描参数，各通道单独保存器件编号、Point、面积和 Light/Dark 状态。
 - 正扫、反扫、正反扫；B2902B 内部 LIST 扫描完成一个扫向后立即更新曲线。
+- 长时间 LIST 扫描通过 VISA 状态字节轮询等待完成，避免 Normal/Long 档在点数较多时被固定通信超时误判为失败。
 - 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、两种测量量程、Measure Delay 和 Measure Speed；所有数值参数在界面显示对应单位。
 - Measure Speed 提供 Auto、Short、Medium、Normal、Long、Manual 六档，默认 Normal；Manual 可自定义 NPLC。
 - Source Range 提供 B2902B 对应固定量程；Voltage/Current Measure Range 提供 Auto、Fixed、Limited 三种模式。由于软件只使用 DC，未列入仅脉冲模式可用的 10 A 档。

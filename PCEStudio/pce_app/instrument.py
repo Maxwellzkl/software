@@ -19,6 +19,7 @@ MEASURE_SPEED_NPLC = {
     "NORMAL": 1.0,
     "LONG": 10.0,
 }
+STATUS_POLL_INTERVAL_S = 0.2
 
 
 class InstrumentError(RuntimeError):
@@ -209,15 +210,47 @@ class B2902BSession:
         while True:
             if cancel_event.is_set():
                 raise InterruptedError("测量已由用户停止。")
-            try:
-                event_status = int(float(instrument.query("*ESR?").strip()))
-            except Exception as exc:
-                raise InstrumentError("等待源表完成扫描时通信失败。") from exc
-            if event_status & 1:
-                return
             if time.monotonic() - started > timeout_s:
                 raise InstrumentError("源表扫描超时。请检查延迟、NPLC 和 VISA 连接。")
-            time.sleep(0.05)
+            try:
+                # A serial poll does not enter the SCPI command queue.  In
+                # contrast, repeatedly sending *ESR? while a long LIST sweep
+                # is active can leave the query queued behind *OPC and hit the
+                # fixed VISA timeout even though the sweep is healthy.
+                status_byte = int(instrument.read_stb())
+            except Exception as exc:
+                # Some VISA backends do not implement serial polling.  Fall
+                # back to the blocking synchronization method used in the
+                # Keysight programming examples, but expand the VISA timeout
+                # to cover the calculated scan duration.
+                remaining_s = max(1.0, timeout_s - (time.monotonic() - started))
+                original_timeout = instrument.timeout
+                instrument.timeout = max(
+                    int(original_timeout or 0), int((remaining_s + 5.0) * 1000)
+                )
+                try:
+                    response = str(instrument.query("*OPC?")).strip()
+                except Exception as query_exc:
+                    raise InstrumentError(
+                        "等待源表完成扫描时通信失败。请检查 USB/VISA 连接。"
+                    ) from query_exc
+                finally:
+                    instrument.timeout = original_timeout
+                if response == "1":
+                    return
+                raise InstrumentError(f"源表返回了无效的 *OPC? 响应：{response!r}") from exc
+
+            # Bit 5 is the Event Status Byte summary.  *ESE 1 below masks
+            # only the OPC event into this bit, so *ESR? is safe to read once
+            # the serial poll reports completion.
+            if status_byte & 0x20:
+                try:
+                    event_status = int(float(instrument.query("*ESR?").strip()))
+                except Exception as exc:
+                    raise InstrumentError("读取源表完成状态失败。") from exc
+                if event_status & 1:
+                    return
+            time.sleep(STATUS_POLL_INTERVAL_S)
 
     def _fetch(self, command: str, expected_count: int) -> np.ndarray:
         try:
@@ -249,6 +282,8 @@ class B2902BSession:
                 self.instrument.write(f":OUTP{channel} ON")
             if progress:
                 progress(10)
+            self.instrument.write("*CLS")
+            self.instrument.write("*ESE 1")
             self.instrument.write(f":INIT (@{channel_list})")
             dwell = settings.source_delay_s + settings.measure_delay_s
             if settings.measure_speed != "AUTO":
