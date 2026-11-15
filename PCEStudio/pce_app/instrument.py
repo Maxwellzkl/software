@@ -20,6 +20,7 @@ MEASURE_SPEED_NPLC = {
     "LONG": 10.0,
 }
 STATUS_POLL_INTERVAL_S = 0.2
+SOURCE_LIST_CHUNK_POINTS = 100
 
 
 class InstrumentError(RuntimeError):
@@ -128,6 +129,35 @@ class B2902BSession:
             except Exception:
                 pass
 
+    def _write_source_list(
+        self,
+        channel: int,
+        source: str,
+        levels: np.ndarray,
+    ) -> None:
+        """Load a long LIST waveform without exceeding one SCPI message."""
+        formatted = [f"{value:.12g}" for value in levels]
+        for offset in range(0, len(formatted), SOURCE_LIST_CHUNK_POINTS):
+            chunk = ",".join(formatted[offset : offset + SOURCE_LIST_CHUNK_POINTS])
+            suffix = "" if offset == 0 else ":APP"
+            self.instrument.write(f":SOUR{channel}:LIST:{source}{suffix} {chunk}")
+
+        try:
+            loaded_count = int(
+                float(
+                    self.instrument.query(
+                        f":SOUR{channel}:LIST:{source}:POIN?"
+                    ).strip()
+                )
+            )
+        except Exception as exc:
+            raise InstrumentError(f"无法确认 CH{channel} 扫描列表点数。") from exc
+        if loaded_count != len(levels):
+            raise InstrumentError(
+                f"CH{channel} 扫描列表仅装载 {loaded_count} 个点，"
+                f"预期 {len(levels)} 个点。请检查源表错误队列或 USB/VISA 连接。"
+            )
+
     def _configure_channel(
         self,
         channel: int,
@@ -137,13 +167,12 @@ class B2902BSession:
         instrument = self.instrument
         source = settings.source_mode
         complementary = "CURR" if source == "VOLT" else "VOLT"
-        list_values = ",".join(f"{value:.12g}" for value in levels)
 
         instrument.write(f":SOUR{channel}:FUNC:MODE {source}")
         instrument.write(f":SOUR{channel}:FUNC:SHAP DC")
         instrument.write(f":SOUR{channel}:{source}:MODE LIST")
         instrument.write(f":SOUR{channel}:{source} {levels[0]:.12g}")
-        instrument.write(f":SOUR{channel}:LIST:{source} {list_values}")
+        self._write_source_list(channel, source, levels)
 
         if settings.source_range_auto:
             instrument.write(f":SOUR{channel}:{source}:RANG:AUTO ON")

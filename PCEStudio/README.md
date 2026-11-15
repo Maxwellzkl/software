@@ -11,6 +11,7 @@
 - 双通道共享扫描参数，各通道单独保存器件编号、Point、面积和 Light/Dark 状态。
 - 正扫、反扫、正反扫；B2902B 内部 LIST 扫描完成一个扫向后立即更新曲线。
 - 长时间 LIST 扫描通过 VISA 状态字节轮询等待完成，避免 Normal/Long 档在点数较多时被固定通信超时误判为失败。
+- 大点数 LIST 波形按 100 点分块写入并用 `:LIST:*:POIN?` 核对实际装载点数，避免 801 点等长列表因单条 SCPI 命令过长而退化为单点扫描。
 - 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、两种测量量程、Measure Delay 和 Measure Speed；所有数值参数在界面显示对应单位。
 - 所有下拉框和数值输入框均禁止用鼠标滚轮改值；鼠标滚轮只滚动参数页面，避免悬停误操作。
 - Measure Speed 提供 Auto、Short、Medium、Normal、Long、Manual 六档，默认 Normal；Manual 可自定义 NPLC。

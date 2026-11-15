@@ -1,10 +1,11 @@
 import threading
+import re
 
 import numpy as np
 import pytest
 
 import pce_app.instrument as instrument_module
-from pce_app.instrument import B2902BSession
+from pce_app.instrument import B2902BSession, InstrumentError
 from pce_app.models import ChannelDut, SweepSettings
 
 
@@ -17,9 +18,21 @@ class FakeInstrument:
         self.status_bytes = [0x20]
         self.stb_reads = 0
         self.stb_error: Exception | None = None
+        self.list_points: dict[tuple[int, str], int] = {}
+        self.reported_list_points: int | None = None
+        self.fetch_count = 3
 
     def write(self, command: str) -> None:
         self.commands.append(command)
+        match = re.fullmatch(
+            r":SOUR(\d+):LIST:(VOLT|CURR)(:APP)? (.+)", command
+        )
+        if match:
+            key = (int(match.group(1)), match.group(2))
+            count = len(match.group(4).split(","))
+            self.list_points[key] = (
+                self.list_points.get(key, 0) + count if match.group(3) else count
+            )
 
     def query(self, command: str) -> str:
         self.commands.append(command)
@@ -29,6 +42,11 @@ class FakeInstrument:
             return "1\n"
         if command == "*OPC?":
             return "1\n"
+        match = re.fullmatch(r":SOUR(\d+):LIST:(VOLT|CURR):POIN\?", command)
+        if match:
+            if self.reported_list_points is not None:
+                return f"{self.reported_list_points}\n"
+            return f"{self.list_points.get((int(match.group(1)), match.group(2)), 0)}\n"
         return "0\n"
 
     def read_stb(self) -> int:
@@ -41,6 +59,10 @@ class FakeInstrument:
 
     def query_ascii_values(self, command: str):
         self.commands.append(command)
+        if self.fetch_count != 3:
+            if "VOLT" in command:
+                return np.linspace(-0.2, 1.2, self.fetch_count)
+            return np.linspace(-0.001, 0.0001, self.fetch_count)
         if "VOLT" in command:
             return [-0.2, 0.5, 1.2]
         return [-0.001, -0.0005, 0.0001]
@@ -174,3 +196,54 @@ def test_wait_falls_back_to_long_timeout_opc_query(monkeypatch) -> None:
     assert fake.stb_reads == 1
     assert "*OPC?" in fake.commands
     assert fake.timeout == 5000
+
+
+def test_801_point_list_is_written_in_chunks_and_verified(monkeypatch) -> None:
+    fake = FakeInstrument()
+    fake.fetch_count = 801
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    settings = SweepSettings(
+        start=-0.2,
+        stop=1.2,
+        count=801,
+        scan_plan="forward",
+        measure_speed="NORMAL",
+    )
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        curves = session.acquire_pass(settings, [dut], "forward", threading.Event())
+
+    list_commands = [
+        command for command in fake.commands if command.startswith(":SOUR1:LIST:VOLT")
+    ]
+    write_commands = [command for command in list_commands if not command.endswith("POIN?")]
+    assert len(write_commands) == 9
+    assert write_commands[0].startswith(":SOUR1:LIST:VOLT ")
+    assert all(
+        command.startswith(":SOUR1:LIST:VOLT:APP ")
+        for command in write_commands[1:]
+    )
+    assert max(map(len, write_commands)) < 2000
+    assert ":SOUR1:LIST:VOLT:POIN?" in fake.commands
+    assert fake.list_points[(1, "VOLT")] == 801
+    assert curves[1].voltage_v.size == 801
+    assert curves[1].current_a.size == 801
+
+
+def test_list_point_mismatch_stops_before_scan(monkeypatch) -> None:
+    fake = FakeInstrument()
+    fake.reported_list_points = 1
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    settings = SweepSettings(start=-0.2, stop=1.2, count=801, scan_plan="forward")
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        with pytest.raises(InstrumentError, match="扫描列表仅装载 1 个点"):
+            session.acquire_pass(settings, [dut], "forward", threading.Event())
+
+    assert ":INIT (@1)" not in fake.commands
