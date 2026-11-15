@@ -140,3 +140,36 @@ def test_parameter_wheels_are_ignored_and_small_screen_layout_stays_compact(
         assert window.left_panel.width() == width_before
     finally:
         window.close()
+
+
+def test_old_database_runs_are_not_loaded_into_new_session_history(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("PCE_STUDIO_DATA_DIR", str(tmp_path / "appdata"))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    previous_row = {
+        "id": 42,
+        "created_at": "2026-01-01T12:00:00",
+        "channel": 1,
+        "device_id": "OLD",
+        "point_name": "1",
+        "condition": "light",
+        "metrics_json": '{"average": null, "forward": null, "reverse": null}',
+    }
+    monkeypatch.setattr(
+        main_window_module.Database,
+        "list_runs",
+        lambda _database, _limit=200: [previous_row],
+    )
+    application = create_application()
+    window = MainWindow()
+    try:
+        application.processEvents()
+        assert window.history_list.count() == 0
+        assert window.details_tabs.tabText(1) == "本次运行曲线"
+
+        window._add_history_item(previous_row, checked=False)
+        assert window.history_list.count() == 1
+    finally:
+        window.close()

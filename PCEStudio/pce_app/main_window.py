@@ -271,7 +271,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._restore_settings()
-        self._reload_history()
+        self._initialize_session_history()
         self._update_mode_visibility()
         self._update_step()
         QTimer.singleShot(0, self.refresh_resources)
@@ -580,14 +580,16 @@ class MainWindow(QMainWindow):
         history_page = QWidget()
         history_layout = QVBoxLayout(history_page)
         history_layout.setContentsMargins(4, 4, 4, 4)
-        history_layout.addWidget(QLabel("勾选测试记录后，可将历史 IV 曲线叠加到主图进行比较。"))
+        history_layout.addWidget(
+            QLabel("仅显示本次软件运行期间的测试；勾选后可将 IV 曲线叠加比较。")
+        )
         self.history_list = QListWidget()
         self.history_list.itemChanged.connect(self._history_item_changed)
         history_layout.addWidget(self.history_list)
 
         self.details_tabs = QTabWidget()
         self.details_tabs.addTab(result_page, "当前测试结果")
-        self.details_tabs.addTab(history_page, "历史曲线")
+        self.details_tabs.addTab(history_page, "本次运行曲线")
         self.details_tabs.setMinimumHeight(155)
         self.details_tabs.setMaximumHeight(190)
         layout.addWidget(self.details_tabs, 0)
@@ -917,11 +919,10 @@ class MainWindow(QMainWindow):
         )
         self.statusBar().showMessage(f"已导出 {output_path.name}", 10000)
 
-    def _reload_history(self) -> None:
+    def _initialize_session_history(self) -> None:
         self.history_list.blockSignals(True)
         self.history_list.clear()
-        for row in self.database.list_runs():
-            self._add_history_item(row, checked=False, block_signal=False)
+        self.selected_history.clear()
         self.history_list.blockSignals(False)
 
     def _history_label(self, row: dict) -> str:
