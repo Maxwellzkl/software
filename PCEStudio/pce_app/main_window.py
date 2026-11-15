@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
@@ -557,10 +558,10 @@ class MainWindow(QMainWindow):
         self.figure = Figure(figsize=(10, 6.5), tight_layout=True)
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setMinimumHeight(340)
-        self.axes = self.figure.add_subplot(111)
-        self.axes.set_xlabel("Voltage (V)")
-        self.axes.set_ylabel("Current Density (mA/cm²)")
-        self.axes.grid(True, alpha=0.25)
+        self.linear_axes = self.figure.add_subplot(121)
+        self.log_axes = self.figure.add_subplot(122, sharex=self.linear_axes)
+        self.axes = self.linear_axes
+        self._style_plot_axes()
         layout.addWidget(self.canvas, 10)
 
         result_page = QWidget()
@@ -966,10 +967,58 @@ class MainWindow(QMainWindow):
             self.selected_history.pop(run_id, None)
         self._redraw_plot()
 
+    def _style_plot_axes(self) -> None:
+        self.linear_axes.set_title("Linear J–V")
+        self.linear_axes.set_xlabel("Voltage (V)")
+        self.linear_axes.set_ylabel("Current Density (mA/cm²)")
+        self.linear_axes.grid(True, alpha=0.25)
+        self.linear_axes.axhline(0.0, color="#80919b", linewidth=0.8)
+        self.linear_axes.axvline(0.0, color="#80919b", linewidth=0.8)
+
+        self.log_axes.set_title("Log |J|–V")
+        self.log_axes.set_xlabel("Voltage (V)")
+        self.log_axes.set_ylabel("|Current Density| (mA/cm²)")
+        self.log_axes.set_yscale("log")
+        self.log_axes.grid(True, which="both", alpha=0.25)
+        self.log_axes.axvline(0.0, color="#80919b", linewidth=0.8)
+
+    def _plot_curve_pair(
+        self,
+        voltage: object,
+        density: object,
+        line_style: str,
+        **style: object,
+    ) -> None:
+        voltage_values = np.asarray(voltage, dtype=float)
+        density_values = np.asarray(density, dtype=float)
+        linear_line = self.linear_axes.plot(
+            voltage_values,
+            density_values,
+            line_style,
+            **style,
+        )[0]
+        magnitude = np.abs(density_values)
+        log_density = np.where(
+            np.isfinite(magnitude) & (magnitude > 0.0),
+            magnitude,
+            np.nan,
+        )
+        log_style = dict(style)
+        log_style["color"] = linear_line.get_color()
+        log_style.pop("label", None)
+        self.log_axes.plot(
+            voltage_values,
+            log_density,
+            line_style,
+            **log_style,
+        )
+
     def _redraw_plot(self) -> None:
-        self.axes.clear()
+        self.linear_axes.clear()
+        self.log_axes.clear()
         colors = {1: "#176b87", 2: "#d35400"}
         line_styles = {"forward": "-", "reverse": "--"}
+        has_curves = False
         for result in reversed(list(self.selected_history.values())):
             for direction, curve in result.curves.items():
                 density = curve.current_density(result.dut.area_cm2)
@@ -977,7 +1026,7 @@ class MainWindow(QMainWindow):
                     f"{result.dut.device_id}-{result.dut.point} CH{result.dut.channel} "
                     f"{'正扫' if direction == 'forward' else '反扫'}"
                 )
-                self.axes.plot(
+                self._plot_curve_pair(
                     curve.voltage_v,
                     density,
                     line_styles[direction],
@@ -985,9 +1034,10 @@ class MainWindow(QMainWindow):
                     alpha=0.72,
                     label=label,
                 )
+                has_curves = True
         for (channel, direction), (voltage, current, area) in self.temporary_curves.items():
             density = current * 1000.0 / area
-            self.axes.plot(
+            self._plot_curve_pair(
                 voltage,
                 density,
                 line_styles[direction],
@@ -995,13 +1045,10 @@ class MainWindow(QMainWindow):
                 linewidth=2.5,
                 label=f"当前 CH{channel} {'正扫' if direction == 'forward' else '反扫'}",
             )
-        self.axes.axhline(0.0, color="#80919b", linewidth=0.8)
-        self.axes.axvline(0.0, color="#80919b", linewidth=0.8)
-        self.axes.set_xlabel("Voltage (V)")
-        self.axes.set_ylabel("Current Density (mA/cm²)")
-        self.axes.grid(True, alpha=0.25)
-        if self.axes.lines[2:]:
-            self.axes.legend(loc="best", fontsize=8)
+            has_curves = True
+        self._style_plot_axes()
+        if has_curves:
+            self.linear_axes.legend(loc="best", fontsize=8)
         self.canvas.draw_idle()
 
     def _save_settings(self) -> None:

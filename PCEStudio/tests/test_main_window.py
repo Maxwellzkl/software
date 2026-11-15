@@ -4,6 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QSettings
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
@@ -171,5 +172,31 @@ def test_old_database_runs_are_not_loaded_into_new_session_history(
 
         window._add_history_item(previous_row, checked=False)
         assert window.history_list.count() == 1
+    finally:
+        window.close()
+
+
+def test_plot_uses_linear_and_absolute_log_current_density_axes(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("PCE_STUDIO_DATA_DIR", str(tmp_path / "appdata"))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    application = create_application()
+    window = MainWindow()
+    try:
+        voltage = np.asarray([-0.2, 0.0, 0.8])
+        current = np.asarray([-4e-4, 0.0, 2e-4])
+        window.temporary_curves[(1, "forward")] = (voltage, current, 0.04)
+        window._redraw_plot()
+        application.processEvents()
+
+        assert len(window.figure.axes) == 2
+        assert window.linear_axes.get_yscale() == "linear"
+        assert window.log_axes.get_yscale() == "log"
+        assert np.allclose(window.linear_axes.lines[0].get_ydata(), [-10.0, 0.0, 5.0])
+        log_values = window.log_axes.lines[0].get_ydata()
+        assert np.allclose(log_values[[0, 2]], [10.0, 5.0])
+        assert np.isnan(log_values[1])
     finally:
         window.close()

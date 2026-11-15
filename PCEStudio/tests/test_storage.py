@@ -1,3 +1,4 @@
+import csv
 import json
 from pathlib import Path
 
@@ -41,6 +42,12 @@ def test_device_and_run_roundtrip(tmp_path: Path) -> None:
     assert loaded.average_metrics is not None
     assert loaded.average_metrics.pce_percent == 10.0
     assert raw_path.read_text(encoding="utf-8-sig").startswith("# Software,PCE Studio")
+    with raw_path.open("r", newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.reader(line for line in handle if not line.startswith("#")))
+    density_column = rows[0].index("Current Density (mA/cm^2)")
+    absolute_density_column = rows[0].index("|Current Density| (mA/cm^2)")
+    assert float(rows[1][density_column]) == -20.0
+    assert float(rows[1][absolute_density_column]) == 20.0
     database.close()
 
 

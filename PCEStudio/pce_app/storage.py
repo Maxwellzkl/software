@@ -75,6 +75,7 @@ def write_raw_csv(path: Path, result: ChannelRunResult) -> None:
                 "Voltage (V)",
                 "Current (A)",
                 "Current Density (mA/cm^2)",
+                "|Current Density| (mA/cm^2)",
                 "Elapsed (s)",
             ]
         )
@@ -100,6 +101,7 @@ def write_raw_csv(path: Path, result: ChannelRunResult) -> None:
                         f"{voltage:.12g}",
                         f"{current:.12g}",
                         f"{current_density:.12g}",
+                        f"{abs(current_density):.12g}",
                         f"{elapsed:.12g}",
                     ]
                 )
