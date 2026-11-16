@@ -14,9 +14,11 @@ def test_dual_channel_simulated_measurement() -> None:
     ]
     completed = []
     failures = []
+    statuses = []
     worker = MeasurementWorker(SIMULATOR_RESOURCE, settings, duts)
     worker.finished.connect(completed.append)
     worker.failed.connect(failures.append)
+    worker.status.connect(statuses.append)
     worker.run()
     application.processEvents()
 
@@ -31,4 +33,4 @@ def test_dual_channel_simulated_measurement() -> None:
     assert light.average_metrics is not None
     assert dark.metrics == {}
     assert dark.average_metrics is None
-
+    assert "正在连续执行正扫 + 反扫…" in statuses

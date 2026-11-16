@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from .calculations import CalculationError, average_metrics, calculate_metrics
 from .instrument import B2902BSession, SIMULATOR_RESOURCE, SimulatedB2902BSession
-from .models import ChannelDut, ChannelRunResult, SweepSettings
+from .models import ChannelDut, ChannelRunResult, CurveData, Direction, SweepSettings
 
 
 class MeasurementWorker(QObject):
@@ -49,48 +49,67 @@ class MeasurementWorker(QObject):
             self.settings.validate()
             for dut in self.duts:
                 dut.validate()
+
+            def record_direction(
+                direction: Direction, curves: dict[int, CurveData]
+            ) -> None:
+                direction_text = "正扫" if direction == "forward" else "反扫"
+                for dut in self.duts:
+                    curve = curves[dut.channel]
+                    results[dut.channel].curves[direction] = curve
+                    self.pass_finished.emit(
+                        dut.channel,
+                        direction,
+                        curve.voltage_v,
+                        curve.current_a,
+                        dut.area_cm2,
+                    )
+                    if dut.condition == "light":
+                        try:
+                            results[dut.channel].metrics[direction] = calculate_metrics(
+                                curve.voltage_v,
+                                curve.current_a,
+                                dut.area_cm2,
+                                self.settings.irradiance_mw_cm2,
+                            )
+                        except CalculationError as exc:
+                            self.warning.emit(
+                                f"CH{dut.channel} {direction_text}性能参数未计算：{exc}"
+                            )
+
             session_args = () if session_type is SimulatedB2902BSession else (self.resource_address,)
             with session_type(*session_args) as session:
                 directions = self.settings.directions
-                for pass_index, direction in enumerate(directions):
+                if self.settings.scan_plan == "both":
+                    self.status.emit("正在连续执行正扫 + 反扫…")
+                    combined = session.acquire_double(
+                        self.settings,
+                        self.duts,
+                        self.cancel_event,
+                        self.progress.emit,
+                    )
+                    for direction in directions:
+                        record_direction(
+                            direction,
+                            {
+                                dut.channel: combined[dut.channel][direction]
+                                for dut in self.duts
+                            },
+                        )
+                else:
+                    direction = directions[0]
                     if self.cancel_event.is_set():
                         raise InterruptedError("测量已由用户停止。")
                     direction_text = "正扫" if direction == "forward" else "反扫"
                     self.status.emit(f"正在执行{direction_text}…")
-
-                    def report(value: int, index: int = pass_index) -> None:
-                        aggregate = int((index * 100 + value) / len(directions))
-                        self.progress.emit(aggregate)
-
                     curves = session.acquire_pass(
                         self.settings,
                         self.duts,
                         direction,
                         self.cancel_event,
-                        report,
+                        self.progress.emit,
                     )
-                    for dut in self.duts:
-                        curve = curves[dut.channel]
-                        results[dut.channel].curves[direction] = curve
-                        self.pass_finished.emit(
-                            dut.channel,
-                            direction,
-                            curve.voltage_v,
-                            curve.current_a,
-                            dut.area_cm2,
-                        )
-                        if dut.condition == "light":
-                            try:
-                                results[dut.channel].metrics[direction] = calculate_metrics(
-                                    curve.voltage_v,
-                                    curve.current_a,
-                                    dut.area_cm2,
-                                    self.settings.irradiance_mw_cm2,
-                                )
-                            except CalculationError as exc:
-                                self.warning.emit(
-                                    f"CH{dut.channel} {direction_text}性能参数未计算：{exc}"
-                                )
+                    record_direction(direction, curves)
 
             if self.settings.scan_plan == "both":
                 for result in results.values():

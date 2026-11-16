@@ -9,7 +9,8 @@
 - 自动枚举 USB VISA 资源并用 `*IDN?` 验证 B2902B。
 - 单通道模式可选择 CH1 或 CH2；双通道模式同步测量两个独立器件/像素。
 - 双通道共享扫描参数，各通道单独保存器件编号、Point、面积和 Light/Dark 状态。
-- 正扫、反扫、正反扫；B2902B 内部 LIST 扫描完成一个扫向后立即更新曲线。
+- 支持单独正扫、单独反扫和正扫 + 反扫；单向 LIST 扫描完成后立即更新曲线。
+- 正扫 + 反扫使用一次连续 LIST 扫描，转折点只采集一次并由两条曲线共享；中途不再读取数据、关闭输出或重新 `INIT`，避免在 Stop 电压处出现通信停顿。
 - 长时间 LIST 扫描通过 VISA 状态字节轮询等待完成，避免 Normal/Long 档在点数较多时被固定通信超时误判为失败。
 - 大点数 LIST 波形按 100 点分块写入并用 `:LIST:*:POIN?` 核对实际装载点数，避免 801 点等长列表因单条 SCPI 命令过长而退化为单点扫描。
 - 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、两种测量量程、Measure Delay 和 Measure Speed；所有数值参数在界面显示对应单位。

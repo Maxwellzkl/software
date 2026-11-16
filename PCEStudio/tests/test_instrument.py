@@ -21,6 +21,8 @@ class FakeInstrument:
         self.list_points: dict[tuple[int, str], int] = {}
         self.reported_list_points: int | None = None
         self.fetch_count = 3
+        self.fetch_voltage_values = None
+        self.fetch_current_values = None
 
     def write(self, command: str) -> None:
         self.commands.append(command)
@@ -59,6 +61,10 @@ class FakeInstrument:
 
     def query_ascii_values(self, command: str):
         self.commands.append(command)
+        if "VOLT" in command and self.fetch_voltage_values is not None:
+            return self.fetch_voltage_values
+        if "CURR" in command and self.fetch_current_values is not None:
+            return self.fetch_current_values
         if self.fetch_count != 3:
             if "VOLT" in command:
                 return np.linspace(-0.2, 1.2, self.fetch_count)
@@ -245,5 +251,47 @@ def test_list_point_mismatch_stops_before_scan(monkeypatch) -> None:
     with B2902BSession("USB0::FAKE::INSTR") as session:
         with pytest.raises(InstrumentError, match="扫描列表仅装载 1 个点"):
             session.acquire_pass(settings, [dut], "forward", threading.Event())
+
+    assert ":INIT (@1)" not in fake.commands
+
+
+def test_double_sweep_uses_one_continuous_list_and_shares_turnaround(
+    monkeypatch,
+) -> None:
+    fake = FakeInstrument()
+    fake.fetch_voltage_values = np.asarray([-2.0, 0.0, 2.0, 0.0, -2.0])
+    fake.fetch_current_values = np.asarray([-2e-4, -1e-4, 1e-5, -9e-5, -1.9e-4])
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    settings = SweepSettings(start=-2.0, stop=2.0, count=3, scan_plan="both")
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        curves = session.acquire_double(settings, [dut], threading.Event())
+
+    assert fake.list_points[(1, "VOLT")] == 5
+    assert ":SOUR1:LIST:VOLT -2,0,2,0,-2" in fake.commands
+    assert ":TRIG1:COUN 5" in fake.commands
+    assert fake.commands.count(":INIT (@1)") == 1
+    assert np.allclose(curves[1]["forward"].voltage_v, [-2.0, 0.0, 2.0])
+    assert np.allclose(curves[1]["reverse"].voltage_v, [2.0, 0.0, -2.0])
+    assert curves[1]["forward"].current_a[-1] == curves[1]["reverse"].current_a[0]
+    assert curves[1]["reverse"].elapsed_s[0] == 0.0
+
+
+def test_double_sweep_rejects_combined_list_over_instrument_limit(
+    monkeypatch,
+) -> None:
+    fake = FakeInstrument()
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    settings = SweepSettings(start=-2.0, stop=2.0, count=50001, scan_plan="both")
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        with pytest.raises(InstrumentError, match="100000 点上限"):
+            session.acquire_double(settings, [dut], threading.Event())
 
     assert ":INIT (@1)" not in fake.commands

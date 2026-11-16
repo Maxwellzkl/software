@@ -21,6 +21,7 @@ MEASURE_SPEED_NPLC = {
 }
 STATUS_POLL_INTERVAL_S = 0.2
 SOURCE_LIST_CHUNK_POINTS = 100
+MAX_LIST_SWEEP_POINTS = 100000
 
 
 class InstrumentError(RuntimeError):
@@ -292,16 +293,16 @@ class B2902BSession:
             )
         return values
 
-    def acquire_pass(
+    def _acquire_levels(
         self,
         settings: SweepSettings,
         duts: list[ChannelDut],
         direction: Direction,
+        levels: np.ndarray,
         cancel_event: threading.Event,
         progress: Callable[[int], None] | None = None,
     ) -> dict[int, CurveData]:
         channels = [dut.channel for dut in duts]
-        levels = settings.levels(direction)
         for channel in channels:
             self._configure_channel(channel, settings, levels)
 
@@ -350,6 +351,69 @@ class B2902BSession:
             return curves
         finally:
             self.safe_output_off(channels)
+
+    def acquire_pass(
+        self,
+        settings: SweepSettings,
+        duts: list[ChannelDut],
+        direction: Direction,
+        cancel_event: threading.Event,
+        progress: Callable[[int], None] | None = None,
+    ) -> dict[int, CurveData]:
+        return self._acquire_levels(
+            settings,
+            duts,
+            direction,
+            settings.levels(direction),
+            cancel_event,
+            progress,
+        )
+
+    def acquire_double(
+        self,
+        settings: SweepSettings,
+        duts: list[ChannelDut],
+        cancel_event: threading.Event,
+        progress: Callable[[int], None] | None = None,
+    ) -> dict[int, dict[Direction, CurveData]]:
+        """Acquire forward and reverse sweeps in one uninterrupted LIST run."""
+        forward_levels = settings.levels("forward")
+        reverse_levels = settings.levels("reverse")
+        combined_levels = np.concatenate((forward_levels, reverse_levels[1:]))
+        if combined_levels.size > MAX_LIST_SWEEP_POINTS:
+            raise InstrumentError(
+                "连续正反扫总点数超过 B2902B 的 100000 点上限；"
+                "请将 VAR1 Count 设置为 50000 或更小。"
+            )
+
+        acquired = self._acquire_levels(
+            settings,
+            duts,
+            "forward",
+            combined_levels,
+            cancel_event,
+            progress,
+        )
+        turnaround = forward_levels.size - 1
+        curves: dict[int, dict[Direction, CurveData]] = {}
+        for channel, curve in acquired.items():
+            reverse_elapsed = curve.elapsed_s[turnaround:].copy()
+            reverse_elapsed -= reverse_elapsed[0]
+            curves[channel] = {
+                "forward": CurveData(
+                    "forward",
+                    curve.voltage_v[: forward_levels.size].copy(),
+                    curve.current_a[: forward_levels.size].copy(),
+                    curve.elapsed_s[: forward_levels.size].copy(),
+                ),
+                "reverse": CurveData(
+                    "reverse",
+                    curve.voltage_v[turnaround:].copy(),
+                    curve.current_a[turnaround:].copy(),
+                    reverse_elapsed,
+                ),
+            }
+        return curves
 
 
 class SimulatedB2902BSession:
@@ -408,3 +472,40 @@ class SimulatedB2902BSession:
         if progress:
             progress(100)
         return curves
+
+    def acquire_double(
+        self,
+        settings: SweepSettings,
+        duts: list[ChannelDut],
+        cancel_event: threading.Event,
+        progress: Callable[[int], None] | None = None,
+    ) -> dict[int, dict[Direction, CurveData]]:
+        def forward_progress(value: int) -> None:
+            if progress:
+                progress(value // 2)
+
+        def reverse_progress(value: int) -> None:
+            if progress:
+                progress(50 + value // 2)
+
+        forward = self.acquire_pass(
+            settings,
+            duts,
+            "forward",
+            cancel_event,
+            forward_progress,
+        )
+        reverse = self.acquire_pass(
+            settings,
+            duts,
+            "reverse",
+            cancel_event,
+            reverse_progress,
+        )
+        return {
+            dut.channel: {
+                "forward": forward[dut.channel],
+                "reverse": reverse[dut.channel],
+            }
+            for dut in duts
+        }
