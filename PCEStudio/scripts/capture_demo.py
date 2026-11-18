@@ -67,6 +67,13 @@ def main() -> int:
     screenshot_path = SCREENSHOT_DIR / "PCEStudio_UI.png"
     if not window.grab().save(str(screenshot_path)):
         raise RuntimeError("界面截图保存失败。")
+    window.parameter_toggle_button.click()
+    application.processEvents()
+    collapsed_screenshot_path = SCREENSHOT_DIR / "PCEStudio_UI_Parameters_Collapsed.png"
+    if not window.grab().save(str(collapsed_screenshot_path)):
+        raise RuntimeError("参数面板收起界面截图保存失败。")
+    window.parameter_toggle_button.click()
+    application.processEvents()
     scroll = window.findChild(QScrollArea)
     if scroll is not None:
         scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
@@ -75,6 +82,7 @@ def main() -> int:
     if not window.grab().save(str(settings_screenshot_path)):
         raise RuntimeError("输出设置界面截图保存失败。")
     print(screenshot_path)
+    print(collapsed_screenshot_path)
     print(settings_screenshot_path)
     print(summary_path)
     window.close()

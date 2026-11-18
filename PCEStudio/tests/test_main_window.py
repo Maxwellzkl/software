@@ -59,6 +59,93 @@ def test_parameter_controls_and_output_directory_picker(monkeypatch, tmp_path) -
         window.close()
 
 
+def test_requested_startup_defaults_override_previous_scan_settings(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("PCE_STUDIO_DATA_DIR", str(tmp_path / "appdata"))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    previous = QSettings("OpenAI", "PCEStudio")
+    previous.setValue("source_mode", "CURR")
+    previous.setValue("count", 71)
+    previous.setValue("source_delay", 1.5)
+    previous.setValue("measure_delay", 0.0)
+    previous.setValue("source_range_choice", "AUTO:1e-07")
+    previous.setValue("voltage_range_choice", "AUTO:0.2")
+    previous.setValue("current_range_choice", "FIXED:0.1")
+    previous.setValue("measure_speed", "SHORT")
+    previous.setValue("measure_voltage", False)
+    previous.setValue("measure_current", False)
+    previous.sync()
+
+    application = create_application()
+    window = MainWindow()
+    try:
+        settings = window._sweep_settings()
+        assert settings.source_mode == "VOLT"
+        assert settings.count == 801
+        assert settings.source_delay_s == 0.0
+        assert settings.measure_delay_s == 0.05
+        assert not settings.source_range_auto
+        assert settings.source_range == 2.0
+        assert settings.voltage_range_mode == "FIXED"
+        assert settings.voltage_range == 2.0
+        assert settings.current_range_mode == "AUTO"
+        assert settings.current_range == 1e-7
+        assert settings.measure_speed == "NORMAL"
+        assert settings.nplc == 1.0
+        assert settings.measure_voltage
+        assert settings.measure_current
+        assert window.trigger_label.text().startswith("Auto")
+        assert not window.windowIcon().isNull()
+        assert not application.windowIcon().isNull()
+    finally:
+        window.close()
+
+
+def test_parameter_panel_can_collapse_and_expand(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PCE_STUDIO_DATA_DIR", str(tmp_path / "appdata"))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    application = create_application()
+    window = MainWindow()
+    try:
+        window.resize(1200, 760)
+        window.show()
+        application.processEvents()
+        assert window.left_panel.isVisible()
+
+        window.parameter_toggle_button.click()
+        application.processEvents()
+        assert not window.left_panel.isVisible()
+        assert window.compact_actions.isVisible()
+        assert window.compact_start_button.isVisible()
+        assert window.compact_stop_button.isVisible()
+        assert window.compact_finish_button.isVisible()
+        assert "展开参数" in window.parameter_toggle_button.text()
+
+        window._set_progress(37)
+        window._set_measurement_running(True)
+        assert window.progress_bar.value() == 37
+        assert window.compact_progress_bar.value() == 37
+        assert not window.start_button.isEnabled()
+        assert not window.compact_start_button.isEnabled()
+        assert window.stop_button.isEnabled()
+        assert window.compact_stop_button.isEnabled()
+        assert not window.finish_button.isEnabled()
+        assert not window.compact_finish_button.isEnabled()
+        window._set_measurement_running(False)
+
+        window.parameter_toggle_button.click()
+        application.processEvents()
+        assert window.left_panel.isVisible()
+        assert not window.compact_actions.isVisible()
+        assert "收起参数" in window.parameter_toggle_button.text()
+        assert 350 <= window.left_panel.width() <= 400
+    finally:
+        window.close()
+
+
 def test_parameter_wheels_are_ignored_and_small_screen_layout_stays_compact(
     monkeypatch, tmp_path
 ) -> None:
@@ -172,6 +259,35 @@ def test_old_database_runs_are_not_loaded_into_new_session_history(
 
         window._add_history_item(previous_row, checked=False)
         assert window.history_list.count() == 1
+    finally:
+        window.close()
+
+
+def test_light_history_label_keeps_all_primary_metrics(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PCE_STUDIO_DATA_DIR", str(tmp_path / "appdata"))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    application = create_application()
+    window = MainWindow()
+    row = {
+        "id": 7,
+        "created_at": "2026-11-18T12:00:00",
+        "channel": 2,
+        "device_id": "D61",
+        "point_name": "3",
+        "condition": "light",
+        "metrics_json": (
+            '{"average":{"pce_percent":12.3456,"voc_v":0.9876,'
+            '"jsc_ma_cm2":21.234,"ff_percent":58.765},'
+            '"forward":null,"reverse":null}'
+        ),
+    }
+    try:
+        label = window._history_label(row)
+        assert "PCE 12.346%" in label
+        assert "Jsc 21.23 mA/cm²" in label
+        assert "Voc 0.9876 V" in label
+        assert "FF 58.765%" in label
     finally:
         window.close()
 

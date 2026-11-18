@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QWheelEvent
+from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QIcon, QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
     QAbstractItemView,
@@ -77,12 +77,28 @@ QPushButton:disabled { background: #d5dde1; color: #7b8a92; }
 QHeaderView::section { background: #e2ebf0; padding: 5px; border: 0; border-right: 1px solid #c2d0d8; }
 QProgressBar { border: 1px solid #b9c8d1; border-radius: 4px; text-align: center; background: white; }
 QProgressBar::chunk { background: #2a8c78; }
+QFrame#compactActions {
+    background: #ffffff; border: 1px solid #cdd9e0; border-radius: 6px;
+}
 QToolButton { background: #245b78; color: white; border: 0; border-radius: 10px; padding: 2px 8px; font-weight: 700; }
 QToolButton:hover { background: #347da3; }
+QToolButton#parameterToggleButton {
+    background: #e7eef2; color: #245b78; border: 1px solid #aabdc8;
+    border-radius: 5px; padding: 3px 10px; font-weight: 600;
+}
+QToolButton#parameterToggleButton:hover { background: #d8e7ef; }
 """
 
 
 GITHUB_URL = "https://github.com/Maxwellzkl/software"
+APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "pce_studio_icon.png"
+DEFAULT_COUNT = 801
+DEFAULT_SOURCE_DELAY_S = 0.0
+DEFAULT_MEASURE_DELAY_S = 0.05
+DEFAULT_SOURCE_RANGE_CHOICE = "FIXED:2"
+DEFAULT_VOLTAGE_RANGE_CHOICE = "FIXED:2"
+DEFAULT_CURRENT_RANGE_CHOICE = "AUTO:1e-07"
+DEFAULT_MEASURE_SPEED = "NORMAL"
 VOLTAGE_RANGES = (
     (0.2, "0.2 V"),
     (2.0, "2 V"),
@@ -167,34 +183,36 @@ class DevicePanel(QGroupBox):
         self.condition_combo.addItem("Light", "light")
         self.condition_combo.addItem("Dark", "dark")
 
-        save_button = QPushButton("保存/更新器件")
-        delete_button = QPushButton("删除器件")
+        save_button = QPushButton("保存")
+        delete_button = QPushButton("删除")
+        save_button.setToolTip("保存或更新当前器件编号与面积")
+        delete_button.setToolTip("删除当前器件配置；不会删除历史测试")
+        save_button.setMaximumWidth(58)
+        delete_button.setMaximumWidth(58)
         save_button.clicked.connect(self._save_profile)
         delete_button.clicked.connect(self._delete_profile)
-        buttons = QWidget()
-        buttons_layout = QHBoxLayout(buttons)
-        buttons_layout.setContentsMargins(0, 0, 0, 0)
-        buttons_layout.addWidget(save_button)
-        buttons_layout.addWidget(delete_button)
 
         layout = QGridLayout(self)
-        layout.setContentsMargins(8, 10, 8, 6)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(4)
+        layout.setContentsMargins(8, 8, 8, 5)
+        layout.setHorizontalSpacing(6)
+        layout.setVerticalSpacing(2)
         layout.addWidget(QLabel("已保存器件"), 0, 0)
         layout.addWidget(self.profile_combo, 0, 1, 1, 3)
+        layout.addWidget(save_button, 0, 4)
+        layout.addWidget(delete_button, 0, 5)
         layout.addWidget(QLabel("器件编号"), 1, 0)
-        layout.addWidget(self.device_edit, 1, 1)
-        layout.addWidget(QLabel("Point"), 1, 2)
-        layout.addWidget(self.point_edit, 1, 3)
+        layout.addWidget(self.device_edit, 1, 1, 1, 2)
+        layout.addWidget(QLabel("Point"), 1, 3)
+        layout.addWidget(self.point_edit, 1, 4, 1, 2)
         layout.addWidget(QLabel("面积"), 2, 0)
-        layout.addWidget(self.area_spin, 2, 1)
-        layout.addWidget(QLabel("类型"), 2, 2)
-        layout.addWidget(self.condition_combo, 2, 3)
-        layout.addWidget(buttons, 3, 0, 1, 4)
+        layout.addWidget(self.area_spin, 2, 1, 1, 2)
+        layout.addWidget(QLabel("类型"), 2, 3)
+        layout.addWidget(self.condition_combo, 2, 4, 1, 2)
         layout.setColumnStretch(1, 3)
-        layout.setColumnStretch(3, 2)
-        self.setMaximumHeight(175)
+        layout.setColumnStretch(2, 1)
+        layout.setColumnStretch(4, 2)
+        layout.setColumnStretch(5, 1)
+        self.setMaximumHeight(126)
         self.reload_profiles()
 
     def reload_profiles(self, keep_device: str | None = None) -> None:
@@ -253,6 +271,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PCE Studio - Keysight B2902B")
+        if APP_ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.setMinimumSize(820, 560)
         available = QApplication.primaryScreen().availableGeometry()
         self.resize(
@@ -269,6 +289,7 @@ class MainWindow(QMainWindow):
         self.session_run_ids: list[int] = []
         self.temporary_curves: dict[tuple[int, str], tuple[object, object, float]] = {}
         self.selected_history: dict[int, ChannelRunResult] = {}
+        self._expanded_parameter_width = 370
 
         self._build_ui()
         self._restore_settings()
@@ -281,18 +302,27 @@ class MainWindow(QMainWindow):
         self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.left_panel = self._build_left_panel()
         self.left_panel.setMinimumWidth(350)
-        self.left_panel.setMaximumWidth(420)
+        self.left_panel.setMaximumWidth(400)
         main_panel = self._build_main_panel()
         main_panel.setMinimumWidth(450)
         self.main_splitter.addWidget(self.left_panel)
         self.main_splitter.addWidget(main_panel)
-        self.main_splitter.setSizes([400, 1200])
+        self.main_splitter.setHandleWidth(5)
+        self.main_splitter.setSizes([370, 1230])
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
-        self.main_splitter.setCollapsible(0, False)
+        self.main_splitter.setCollapsible(0, True)
         self.main_splitter.setCollapsible(1, False)
         self.setCentralWidget(self.main_splitter)
         self.statusBar().showMessage("就绪")
+        self.parameter_toggle_button = QToolButton()
+        self.parameter_toggle_button.setObjectName("parameterToggleButton")
+        self.parameter_toggle_button.setCheckable(True)
+        self.parameter_toggle_button.setText("◀ 收起参数")
+        self.parameter_toggle_button.setToolTip("收起/展开参数设置面板（Ctrl+B）")
+        self.parameter_toggle_button.setShortcut("Ctrl+B")
+        self.parameter_toggle_button.toggled.connect(self._toggle_parameter_panel)
+        self.statusBar().addPermanentWidget(self.parameter_toggle_button)
         author = QLabel(
             f'created by ZKL&nbsp;&nbsp;·&nbsp;&nbsp;<a href="{GITHUB_URL}">GitHub</a>'
         )
@@ -321,6 +351,24 @@ class MainWindow(QMainWindow):
         wrapper_layout.setContentsMargins(4, 4, 4, 4)
         wrapper_layout.addWidget(scroll)
         return wrapper
+
+    def _toggle_parameter_panel(self, collapsed: bool) -> None:
+        if collapsed:
+            if self.left_panel.isVisible():
+                self._expanded_parameter_width = max(350, self.left_panel.width())
+            self.left_panel.hide()
+            self.compact_actions.setVisible(True)
+            self.parameter_toggle_button.setText("▶ 展开参数")
+            self.parameter_toggle_button.setToolTip("展开参数设置面板（Ctrl+B）")
+            return
+
+        self.left_panel.show()
+        self.compact_actions.setVisible(False)
+        total_width = max(self.main_splitter.width(), self.width())
+        panel_width = min(400, max(350, self._expanded_parameter_width))
+        self.main_splitter.setSizes([panel_width, max(450, total_width - panel_width)])
+        self.parameter_toggle_button.setText("◀ 收起参数")
+        self.parameter_toggle_button.setToolTip("收起参数设置面板（Ctrl+B）")
 
     def _connection_group(self) -> QGroupBox:
         group = QGroupBox("USB VISA 连接")
@@ -379,7 +427,7 @@ class MainWindow(QMainWindow):
         self.stop_spin = _double_spin(-210.0, 210.0, 1.2, 6)
         self.count_spin = NoWheelSpinBox()
         self.count_spin.setRange(2, 100000)
-        self.count_spin.setValue(71)
+        self.count_spin.setValue(DEFAULT_COUNT)
         self.step_label = QLabel()
         self.step_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         for widget in (self.start_spin, self.stop_spin, self.count_spin):
@@ -404,7 +452,9 @@ class MainWindow(QMainWindow):
         current_row = self._measure_range_row(
             self.measure_current_check, self.current_range_combo
         )
-        self.measure_delay_spin = _double_spin(0.0, 1000.0, 0.0, 6, " s")
+        self.measure_delay_spin = _double_spin(
+            0.0, 1000.0, DEFAULT_MEASURE_DELAY_S, 6, " s"
+        )
         self.measure_speed_combo = NoWheelComboBox()
         for label, value in MEASURE_SPEEDS:
             self.measure_speed_combo.addItem(label, value)
@@ -419,6 +469,8 @@ class MainWindow(QMainWindow):
         speed_layout.addWidget(self.measure_speed_combo, 1)
         speed_layout.addWidget(self.nplc_spin, 1)
         self.irradiance_spin = _double_spin(0.000001, 100000.0, 100.0, 6, " mW/cm²")
+        self.trigger_label = QLabel("Auto（内部自动触发）")
+        self.trigger_label.setToolTip("B2902B 使用自动内部触发推进每个扫描点。")
 
         self.measure_voltage_check.toggled.connect(self._update_measure_range_enabled)
         self.measure_current_check.toggled.connect(self._update_measure_range_enabled)
@@ -444,10 +496,20 @@ class MainWindow(QMainWindow):
         layout.addRow("Current Measure", current_row)
         layout.addRow("Measure Delay", self.measure_delay_spin)
         layout.addRow("Measure Speed", speed_row)
+        layout.addRow("Trigger", self.trigger_label)
         layout.addRow("光功率密度", self.irradiance_spin)
         self._source_mode_changed()
+        self._set_combo_data(self.source_range_combo, DEFAULT_SOURCE_RANGE_CHOICE)
+        self._set_combo_data(self.voltage_range_combo, DEFAULT_VOLTAGE_RANGE_CHOICE)
+        self._set_combo_data(self.current_range_combo, DEFAULT_CURRENT_RANGE_CHOICE)
         self._measure_speed_changed()
         return group
+
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value: object) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     @staticmethod
     def _range_key(mode: str, value: float) -> str:
@@ -518,7 +580,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("测量控制")
         self.start_button = QPushButton("开始测量")
         self.start_button.setObjectName("startButton")
-        self.stop_button = QPushButton("停止测量")
+        self.stop_button = QPushButton("中断测量")
         self.stop_button.setObjectName("stopButton")
         self.finish_button = QPushButton("结束并导出统计")
         self.finish_button.setObjectName("finishButton")
@@ -536,6 +598,36 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.progress_bar, 2, 0, 1, 2)
         return group
 
+    def _compact_actions_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("compactActions")
+        self.compact_start_button = QPushButton("开始测量")
+        self.compact_start_button.setObjectName("startButton")
+        self.compact_stop_button = QPushButton("中断测量")
+        self.compact_stop_button.setObjectName("stopButton")
+        self.compact_finish_button = QPushButton("结束测量并统计")
+        self.compact_finish_button.setObjectName("finishButton")
+        self.compact_stop_button.setEnabled(False)
+        self.compact_start_button.clicked.connect(self.start_measurement)
+        self.compact_stop_button.clicked.connect(self.stop_measurement)
+        self.compact_finish_button.clicked.connect(self.export_session)
+        self.compact_progress_bar = QProgressBar()
+        self.compact_progress_bar.setRange(0, 100)
+        self.compact_progress_bar.setValue(0)
+        self.compact_progress_bar.setMaximumWidth(210)
+
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(6)
+        layout.addWidget(QLabel("测量控制"))
+        layout.addWidget(self.compact_start_button)
+        layout.addWidget(self.compact_stop_button)
+        layout.addWidget(self.compact_finish_button)
+        layout.addStretch(1)
+        layout.addWidget(self.compact_progress_bar)
+        bar.setVisible(False)
+        return bar
+
     def _build_main_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -552,10 +644,13 @@ class MainWindow(QMainWindow):
         for device_panel in self.device_panels.values():
             device_panel.profiles_changed.connect(self._reload_profiles)
             dut_layout.addWidget(device_panel)
-        dut_row.setMaximumHeight(175)
+        dut_row.setMaximumHeight(126)
         layout.addWidget(dut_row, 0)
 
-        self.figure = Figure(figsize=(10, 6.5), tight_layout=True)
+        self.compact_actions = self._compact_actions_bar()
+        layout.addWidget(self.compact_actions, 0)
+
+        self.figure = Figure(figsize=(11.5, 7.2), tight_layout=True)
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setMinimumHeight(340)
         self.linear_axes = self.figure.add_subplot(121)
@@ -591,8 +686,8 @@ class MainWindow(QMainWindow):
         self.details_tabs = QTabWidget()
         self.details_tabs.addTab(result_page, "当前测试结果")
         self.details_tabs.addTab(history_page, "本次运行曲线")
-        self.details_tabs.setMinimumHeight(155)
-        self.details_tabs.setMaximumHeight(190)
+        self.details_tabs.setMinimumHeight(135)
+        self.details_tabs.setMaximumHeight(165)
         layout.addWidget(self.details_tabs, 0)
         return panel
 
@@ -659,6 +754,7 @@ class MainWindow(QMainWindow):
             "但不会切换到低于所选值的量程。源量对应的测量 Range 由 Source Range 决定。\n\n"
             "Measure Speed：Auto 由量程决定；Short=0.01 PLC，Medium=0.1 PLC，"
             "Normal=1 PLC，Long=10 PLC；Manual 可自定义 0.0001-100 PLC。\n\n"
+            "Trigger：固定为 Auto，使用 B2902B 自动内部触发推进扫描点。\n\n"
             "光功率密度：Light 数据计算 PCE 时使用，单位 mW/cm²。",
         )
 
@@ -792,10 +888,8 @@ class MainWindow(QMainWindow):
         self.result_table.setRowCount(0)
         self.temporary_curves.clear()
         self._redraw_plot()
-        self.progress_bar.setValue(0)
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.finish_button.setEnabled(False)
+        self._set_progress(0)
+        self._set_measurement_running(True)
         self.refresh_button.setEnabled(False)
         self.connect_button.setEnabled(False)
 
@@ -804,7 +898,7 @@ class MainWindow(QMainWindow):
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.status.connect(self.statusBar().showMessage)
-        self.worker.progress.connect(self.progress_bar.setValue)
+        self.worker.progress.connect(self._set_progress)
         self.worker.pass_finished.connect(self._pass_finished)
         self.worker.warning.connect(lambda message: self.statusBar().showMessage(message, 15000))
         self.worker.finished.connect(self._measurement_finished)
@@ -818,7 +912,20 @@ class MainWindow(QMainWindow):
         if self.worker is not None:
             self.worker.request_stop()
             self.stop_button.setEnabled(False)
+            self.compact_stop_button.setEnabled(False)
             self.statusBar().showMessage("正在安全停止并关闭输出…")
+
+    def _set_progress(self, value: int) -> None:
+        self.progress_bar.setValue(value)
+        self.compact_progress_bar.setValue(value)
+
+    def _set_measurement_running(self, running: bool) -> None:
+        self.start_button.setEnabled(not running)
+        self.compact_start_button.setEnabled(not running)
+        self.stop_button.setEnabled(running)
+        self.compact_stop_button.setEnabled(running)
+        self.finish_button.setEnabled(not running)
+        self.compact_finish_button.setEnabled(not running)
 
     def _pass_finished(
         self, channel: int, direction: str, voltage: object, current: object, area: float
@@ -881,12 +988,12 @@ class MainWindow(QMainWindow):
         self.result_table.resizeColumnsToContents()
 
     def _measurement_failed(self, message: str) -> None:
-        self.progress_bar.setValue(0)
+        self._set_progress(0)
         QMessageBox.critical(self, "测量失败", message)
         self.statusBar().showMessage("测量失败，源表输出已关闭", 10000)
 
     def _measurement_stopped(self, message: str) -> None:
-        self.progress_bar.setValue(0)
+        self._set_progress(0)
         self.statusBar().showMessage(message, 8000)
 
     def _thread_finished(self) -> None:
@@ -896,9 +1003,7 @@ class MainWindow(QMainWindow):
             self.thread.deleteLater()
         self.worker = None
         self.thread = None
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.finish_button.setEnabled(True)
+        self._set_measurement_running(False)
         self.refresh_button.setEnabled(True)
         self.connect_button.setEnabled(True)
 
@@ -928,20 +1033,35 @@ class MainWindow(QMainWindow):
 
     def _history_label(self, row: dict) -> str:
         metric_payload = json.loads(row["metrics_json"])
-        metric = metric_payload.get("average") or metric_payload.get("forward") or metric_payload.get("reverse")
-        pce = "Dark" if row["condition"] == "dark" else (
-            f"PCE {metric['pce_percent']:.3f}%" if metric else "PCE —"
+        metric = (
+            metric_payload.get("average")
+            or metric_payload.get("forward")
+            or metric_payload.get("reverse")
         )
+        if row["condition"] == "dark":
+            metric_text = "Dark（不计算）"
+        elif metric:
+            metric_text = (
+                f"PCE {metric['pce_percent']:.3f}%  ·  "
+                f"Jsc {metric['jsc_ma_cm2']:.4g} mA/cm²  ·  "
+                f"Voc {metric['voc_v']:.4g} V  ·  "
+                f"FF {metric['ff_percent']:.3f}%"
+            )
+        else:
+            metric_text = "PCE —  ·  Jsc —  ·  Voc —  ·  FF —"
         return (
             f"{row['created_at']}  |  CH{row['channel']}  |  "
-            f"{row['device_id']}_{row['condition']}_{row['point_name']}  |  {pce}"
+            f"{row['device_id']}_{row['condition']}_{row['point_name']}  |  "
+            f"{metric_text}"
         )
 
     def _add_history_item(
         self, row: dict, checked: bool, block_signal: bool = True
     ) -> None:
         previous = self.history_list.blockSignals(True) if block_signal else False
-        item = QListWidgetItem(self._history_label(row))
+        label = self._history_label(row)
+        item = QListWidgetItem(label)
+        item.setToolTip(label)
         item.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
@@ -1084,7 +1204,6 @@ class MainWindow(QMainWindow):
         mappings = (
             (self.channel_mode_combo, "channel_mode"),
             (self.single_channel_combo, "single_channel"),
-            (self.source_mode_combo, "source_mode"),
             (self.scan_plan_combo, "scan_plan"),
         )
         for combo, key in mappings:
@@ -1093,37 +1212,30 @@ class MainWindow(QMainWindow):
                 index = combo.findData(int(value) if key == "single_channel" else value)
                 if index >= 0:
                     combo.setCurrentIndex(index)
-        for combo, key in (
-            (self.source_range_combo, "source_range_choice"),
-            (self.voltage_range_combo, "voltage_range_choice"),
-            (self.current_range_combo, "current_range_choice"),
-            (self.measure_speed_combo, "measure_speed"),
-        ):
-            value = self.app_settings.value(key)
-            if value is not None:
-                index = combo.findData(value)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-        for checkbox, key in (
-            (self.measure_voltage_check, "measure_voltage"),
-            (self.measure_current_check, "measure_current"),
-        ):
-            value = self.app_settings.value(key)
-            if value is not None:
-                checkbox.setChecked(str(value).casefold() in {"1", "true", "yes"})
+        self._set_combo_data(self.source_mode_combo, "VOLT")
+        self._source_mode_changed()
+        self._set_combo_data(self.source_range_combo, DEFAULT_SOURCE_RANGE_CHOICE)
+        self._set_combo_data(self.voltage_range_combo, DEFAULT_VOLTAGE_RANGE_CHOICE)
+        self._set_combo_data(self.current_range_combo, DEFAULT_CURRENT_RANGE_CHOICE)
+        self._set_combo_data(self.measure_speed_combo, DEFAULT_MEASURE_SPEED)
+        self.measure_voltage_check.setChecked(True)
+        self.measure_current_check.setChecked(True)
         for spin, key, default in (
             (self.start_spin, "start", -0.2),
             (self.stop_spin, "stop", 1.2),
-            (self.count_spin, "count", 71),
-            (self.source_delay_spin, "source_delay", 0.0),
-            (self.measure_delay_spin, "measure_delay", 0.0),
             (self.compliance_spin, "compliance", 0.1),
             (self.irradiance_spin, "irradiance", 100.0),
             (self.nplc_spin, "manual_nplc", 1.0),
         ):
             value = self.app_settings.value(key, default)
             spin.setValue(float(value) if isinstance(spin, QDoubleSpinBox) else int(value))
+        self.count_spin.setValue(DEFAULT_COUNT)
+        self.source_delay_spin.setValue(DEFAULT_SOURCE_DELAY_S)
+        self.measure_delay_spin.setValue(DEFAULT_MEASURE_DELAY_S)
         self._source_mode_changed()
+        self._set_combo_data(self.source_range_combo, DEFAULT_SOURCE_RANGE_CHOICE)
+        self._set_combo_data(self.voltage_range_combo, DEFAULT_VOLTAGE_RANGE_CHOICE)
+        self._set_combo_data(self.current_range_combo, DEFAULT_CURRENT_RANGE_CHOICE)
         self._measure_speed_changed()
 
     def closeEvent(self, event: QCloseEvent) -> None:
@@ -1145,6 +1257,8 @@ def create_application() -> QApplication:
     application = QApplication.instance() or QApplication([])
     application.setApplicationName("PCE Studio")
     application.setOrganizationName("OpenAI")
+    if APP_ICON_PATH.exists():
+        application.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     font_candidates = (
         ("C:/Windows/Fonts/msyh.ttc", "Microsoft YaHei"),
         ("C:/Windows/Fonts/simhei.ttf", "SimHei"),

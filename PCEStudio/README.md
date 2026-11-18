@@ -16,19 +16,23 @@
 - 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、两种测量量程、Measure Delay 和 Measure Speed；所有数值参数在界面显示对应单位。
 - 所有下拉框和数值输入框均禁止用鼠标滚轮改值；鼠标滚轮只滚动参数页面，避免悬停误操作。
 - Measure Speed 提供 Auto、Short、Medium、Normal、Long、Manual 六档，默认 Normal；Manual 可自定义 NPLC。
+- 每次启动采用固定安全默认值：电压源模式、Source Range Fixed 2 V、Voltage Measure Fixed 2 V、Current Measure Auto、Normal、Measure Delay 0.05 s、Source Delay 0 s、Trigger Auto、VAR1 Count 801；输出目录、器件配置等仍会持久保存。
 - Source Range 提供 B2902B 对应固定量程；Voltage/Current Measure Range 提供 Auto、Fixed、Limited 三种模式。由于软件只使用 DC，未列入仅脉冲模式可用的 10 A 档。
 - 根据 Start、Stop 和 VAR1 Count 实时显示正扫/反扫步长。
 - Light 数据分别计算正扫和反扫的 PCE、Voc、Jsc、FF、Pmax；双扫按平均 Voc/Jsc/FF 重新计算平均 PCE。
 - Dark 数据只保存和绘图，不计算光伏性能。
 - 器件编号和面积保存至本机数据库；本次软件运行期间测得的曲线可勾选叠加比较。
 - 重新打开软件时曲线列表从空白开始，不再自动载入几个月前的测试；已有数据库记录、原始 CSV 和统计文件不会被删除。
-- IV 图为右侧主工作区，左图显示线性 J–V，右图以对数纵轴显示 |J|–V（负电流密度取绝对值，零值跳过）；器件配置采用紧凑卡片，结果与本次运行曲线使用底部标签页切换。
+- IV 图为右侧主工作区，左图显示线性 J–V，右图以对数纵轴显示 |J|–V（负电流密度取绝对值，零值跳过）；器件配置和结果区域进一步压缩，状态栏“收起参数/展开参数”按钮（Ctrl+B）可让曲线占满横向工作区。
 - 窗口初始尺寸会按屏幕可用区域自动适配，参数栏宽度保持在紧凑范围；小屏幕可通过左侧滚动条查看全部参数。
 - 原始文件名为 `器件编号_light或dark_Point.csv`，重名时自动添加 `_002` 等序号。
 - 原始 CSV 同时保存带符号的 `Current Density` 和供对数绘图使用的绝对值 `|Current Density|` 两列。
 - 数据输出目录可直接输入，也可点击“选择…”打开 Windows 目录选择窗口。
 - “结束并导出统计”生成 `output_file_年月日_时分秒.xlsx`。
 - “i 参数说明”可查看扫描、量程、速度和单位解释；右下角显示 `created by ZKL` 及可点击的 GitHub 链接。
+- 软件窗口、任务栏及 Windows EXE 使用体现高填充因子线性 J–V 与光照器件对数 |J|–V 特征的新图标。
+- 参数面板可收起以扩大双图绘图区；收起后仍固定显示“开始测量 / 中断测量 / 结束测量并统计”和同步进度条。
+- 本次运行曲线列表同时显示 PCE、Jsc、Voc 与 FF，鼠标悬停可查看完整文字；Dark 曲线保持仅保存和绘制。
 - 内置明确标注的 B2902B 模拟器，用于无源表时验证界面、计算、保存和导出流程。
 
 ## 计算口径
