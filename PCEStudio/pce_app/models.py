@@ -11,6 +11,15 @@ ScanPlan = Literal["forward", "reverse", "both"]
 SourceMode = Literal["VOLT", "CURR"]
 RangeMode = Literal["AUTO", "FIXED", "LIMITED"]
 MeasureSpeed = Literal["AUTO", "SHORT", "MEDIUM", "NORMAL", "LONG", "MANUAL"]
+TriggerMode = Literal["AUTO", "TIMER"]
+
+
+_MEASURE_SPEED_NPLC = {
+    "SHORT": 0.01,
+    "MEDIUM": 0.1,
+    "NORMAL": 1.0,
+    "LONG": 10.0,
+}
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,9 @@ class SweepSettings:
     nplc_auto: bool = False
     measure_speed: MeasureSpeed = "NORMAL"
     nplc: float = 1.0
+    trigger_mode: TriggerMode = "AUTO"
+    minimum_auto_trigger_period_enabled: bool = False
+    trigger_period_s: float = 0.1
     irradiance_mw_cm2: float = 100.0
 
     @property
@@ -52,6 +64,35 @@ class SweepSettings:
         values = np.linspace(self.start, self.stop, self.count, dtype=float)
         return values if direction == "forward" else values[::-1].copy()
 
+    def estimated_point_period_s(self, line_frequency_hz: float = 50.0) -> float:
+        """Conservative point-time estimate used for UI guidance and timeouts."""
+        if line_frequency_hz <= 0:
+            raise ValueError("电网频率必须大于 0。")
+        nplc = _MEASURE_SPEED_NPLC.get(self.measure_speed, self.nplc)
+        if self.measure_speed == "AUTO":
+            nplc = 1.0
+        measurement_time = nplc / line_frequency_hz
+        # Source and acquire delays start from the same trigger and therefore run
+        # in parallel.  The small margin covers command/range-switch overhead.
+        return max(self.source_delay_s, self.measure_delay_s + measurement_time) + 0.001
+
+    @property
+    def uses_timer_trigger(self) -> bool:
+        if self.trigger_mode == "TIMER":
+            return True
+        return (
+            self.minimum_auto_trigger_period_enabled
+            and self.trigger_period_s > self.estimated_point_period_s()
+        )
+
+    @property
+    def effective_trigger_period_s(self) -> float:
+        if self.trigger_mode == "TIMER":
+            return self.trigger_period_s
+        if self.uses_timer_trigger:
+            return self.trigger_period_s
+        return 0.0
+
     def validate(self) -> None:
         if self.count < 2:
             raise ValueError("VAR1 Count 必须至少为 2。")
@@ -63,6 +104,10 @@ class SweepSettings:
             raise ValueError("Measure Speed 设置无效。")
         if self.measure_speed == "MANUAL" and not 0.0001 <= self.nplc <= 100.0:
             raise ValueError("Manual NPLC 必须在 0.0001 至 100 PLC 之间。")
+        if self.trigger_mode not in {"AUTO", "TIMER"}:
+            raise ValueError("Trigger 模式设置无效。")
+        if not 2e-5 <= self.trigger_period_s <= 100000.0:
+            raise ValueError("Trigger Period 必须在 20 μs 至 100000 s 之间。")
         for mode, value, label in (
             (self.voltage_range_mode, self.voltage_range, "电压测量量程"),
             (self.current_range_mode, self.current_range, "电流测量量程"),
@@ -89,6 +134,27 @@ class SweepSettings:
                     f"固定 Source Range {self.source_range:g} {unit} 无法覆盖扫描值 "
                     f"{largest_source:g} {unit}。"
                 )
+        largest_source = max(abs(self.start), abs(self.stop))
+        if (
+            self.source_mode == "VOLT"
+            and self.measure_voltage
+            and self.voltage_range_mode == "FIXED"
+            and largest_source > self.voltage_range * 1.05
+        ):
+            raise ValueError(
+                f"固定 Voltage Measure Range {self.voltage_range:g} V 无法覆盖扫描值 "
+                f"{largest_source:g} V。"
+            )
+        if (
+            self.source_mode == "CURR"
+            and self.measure_current
+            and self.current_range_mode == "FIXED"
+            and largest_source > self.current_range * 1.05
+        ):
+            raise ValueError(
+                f"固定 Current Measure Range {self.current_range:g} A 无法覆盖扫描值 "
+                f"{largest_source:g} A。"
+            )
         if self.irradiance_mw_cm2 <= 0:
             raise ValueError("光功率密度必须大于 0。")
         if self.source_mode == "VOLT" and not self.measure_current:

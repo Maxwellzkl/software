@@ -224,7 +224,13 @@ class B2902BSession:
                 instrument.write(f":SENS{channel}:{function}:NPLC {nplc:.12g}")
 
         instrument.write(f":SENS{channel}:{complementary}:PROT {settings.compliance:.12g}")
-        instrument.write(f":TRIG{channel}:SOUR AINT")
+        if settings.uses_timer_trigger:
+            instrument.write(f":TRIG{channel}:SOUR TIM")
+            instrument.write(
+                f":TRIG{channel}:TIM {settings.effective_trigger_period_s:.12g}"
+            )
+        else:
+            instrument.write(f":TRIG{channel}:SOUR AINT")
         instrument.write(f":TRIG{channel}:COUN {len(levels)}")
         instrument.write(f":TRIG{channel}:TRAN:DEL {settings.source_delay_s:.12g}")
         instrument.write(f":TRIG{channel}:ACQ:DEL {settings.measure_delay_s:.12g}")
@@ -315,9 +321,9 @@ class B2902BSession:
             self.instrument.write("*CLS")
             self.instrument.write("*ESE 1")
             self.instrument.write(f":INIT (@{channel_list})")
-            dwell = settings.source_delay_s + settings.measure_delay_s
-            if settings.measure_speed != "AUTO":
-                dwell += MEASURE_SPEED_NPLC.get(settings.measure_speed, settings.nplc) / 50.0
+            dwell = settings.estimated_point_period_s()
+            if settings.uses_timer_trigger:
+                dwell = max(dwell, settings.effective_trigger_period_s)
             timeout_s = max(15.0, len(levels) * (dwell + 0.2) + 10.0)
             self._wait_for_complete(cancel_event, timeout_s)
             if progress:

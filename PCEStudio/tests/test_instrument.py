@@ -125,8 +125,12 @@ def test_dual_channel_scpi_sequence(monkeypatch) -> None:
     assert ":SOUR1:VOLT:RANG 2" in fake.commands
     assert ":SENS1:CURR:RANG:AUTO ON" in fake.commands
     assert ":SENS1:CURR:RANG:AUTO:LLIM 1e-06" in fake.commands
+    assert ":SENS1:VOLT:RANG:AUTO OFF" in fake.commands
+    assert ":SENS1:VOLT:RANG 2" in fake.commands
     assert ":SENS1:CURR:NPLC:AUTO OFF" in fake.commands
     assert ":SENS1:CURR:NPLC 1" in fake.commands
+    assert ":TRIG1:SOUR AINT" in fake.commands
+    assert not any(command.startswith(":TRIG1:TIM ") for command in fake.commands)
     assert ":INIT (@1,2)" in fake.commands
     assert ":OUTP1 OFF" in fake.commands
     assert ":OUTP2 OFF" in fake.commands
@@ -152,6 +156,105 @@ def test_auto_measure_speed_enables_instrument_nplc_auto(monkeypatch) -> None:
     assert ":SENS1:VOLT:NPLC:AUTO ON" in fake.commands
     assert ":SENS1:CURR:NPLC:AUTO ON" in fake.commands
     assert not any(command.startswith(":SENS1:CURR:NPLC ") for command in fake.commands)
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected_period"),
+    [
+        (
+            SweepSettings(
+                start=-0.2,
+                stop=1.2,
+                count=3,
+                trigger_mode="TIMER",
+                trigger_period_s=0.25,
+            ),
+            0.25,
+        ),
+        (
+            SweepSettings(
+                start=-0.2,
+                stop=1.2,
+                count=3,
+                trigger_mode="AUTO",
+                minimum_auto_trigger_period_enabled=True,
+                trigger_period_s=0.1,
+            ),
+            0.1,
+        ),
+    ],
+)
+def test_timer_and_auto_minimum_period_trigger_scpi(
+    monkeypatch, settings, expected_period
+) -> None:
+    fake = FakeInstrument()
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        session.acquire_pass(settings, [dut], "forward", threading.Event())
+
+    assert ":TRIG1:SOUR TIM" in fake.commands
+    assert f":TRIG1:TIM {expected_period:.12g}" in fake.commands
+    assert ":TRIG1:SOUR AINT" not in fake.commands
+
+
+def test_auto_minimum_period_keeps_aint_when_auto_is_already_slower(
+    monkeypatch,
+) -> None:
+    fake = FakeInstrument()
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    settings = SweepSettings(
+        start=-0.2,
+        stop=1.2,
+        count=3,
+        trigger_mode="AUTO",
+        minimum_auto_trigger_period_enabled=True,
+        trigger_period_s=0.01,
+    )
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        session.acquire_pass(settings, [dut], "forward", threading.Event())
+
+    assert ":TRIG1:SOUR AINT" in fake.commands
+    assert not any(command.startswith(":TRIG1:TIM ") for command in fake.commands)
+
+
+def test_long_timer_period_is_included_in_scan_timeout(monkeypatch) -> None:
+    fake = FakeInstrument()
+    fake.fetch_count = 20
+    monkeypatch.setattr(
+        instrument_module.visa, "ResourceManager", lambda: FakeManager(fake)
+    )
+    settings = SweepSettings(
+        start=-0.2,
+        stop=1.2,
+        count=20,
+        trigger_mode="TIMER",
+        trigger_period_s=1.0,
+    )
+    dut = ChannelDut(1, "A", "1", 0.04, "light")
+    captured = {}
+
+    with B2902BSession("USB0::FAKE::INSTR") as session:
+        session._wait_for_complete = (  # type: ignore[method-assign]
+            lambda _cancel_event, timeout_s: captured.update(timeout_s=timeout_s)
+        )
+        session.acquire_pass(settings, [dut], "forward", threading.Event())
+
+    assert captured["timeout_s"] >= 20.0 + 10.0
+
+
+def test_trigger_period_validation() -> None:
+    with pytest.raises(ValueError, match="20 μs"):
+        SweepSettings(trigger_period_s=1e-6).validate()
+    with pytest.raises(ValueError, match="Trigger 模式"):
+        SweepSettings(trigger_mode="BUS").validate()  # type: ignore[arg-type]
 
 
 def test_long_scan_wait_uses_serial_poll_instead_of_repeated_esr_queries(

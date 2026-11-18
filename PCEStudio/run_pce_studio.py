@@ -7,6 +7,7 @@ _smoke_dir = os.environ.get("PCE_STUDIO_SMOKE_DIR")
 if os.environ.get("PCE_STUDIO_SMOKE_TEST") == "1" and _smoke_dir:
     _smoke_path = Path(_smoke_dir)
     _smoke_path.mkdir(parents=True, exist_ok=True)
+    os.environ["PCE_STUDIO_DATA_DIR"] = str(_smoke_path / "appdata")
     (_smoke_path / "runner.log").write_text("runner entered\n", encoding="utf-8")
 
 try:

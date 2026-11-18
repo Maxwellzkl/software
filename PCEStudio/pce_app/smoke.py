@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMessageBox
 
 from .instrument import SIMULATOR_RESOURCE
 
@@ -20,6 +21,21 @@ def schedule_smoke_test(application, window) -> None:
             handle.write(message + "\n")
 
     log("smoke helper entered")
+    QMessageBox.critical = staticmethod(
+        lambda _parent, title, message, *args, **kwargs: log(
+            f"critical dialog: {title}: {message}"
+        )
+    )
+    QMessageBox.warning = staticmethod(
+        lambda _parent, title, message, *args, **kwargs: log(
+            f"warning dialog: {title}: {message}"
+        )
+    )
+    QMessageBox.information = staticmethod(
+        lambda _parent, title, message, *args, **kwargs: log(
+            f"information dialog: {title}: {message}"
+        )
+    )
 
     def start() -> None:
         try:
@@ -40,6 +56,13 @@ def schedule_smoke_test(application, window) -> None:
             log("simulator connected")
             window.start_measurement()
             log("measurement requested")
+            if window.worker is not None:
+                window.worker.finished.connect(lambda _results: log("worker finished"))
+                window.worker.failed.connect(lambda message: log(f"worker failed: {message}"))
+                window.worker.stopped.connect(lambda message: log(f"worker stopped: {message}"))
+                window.worker.done.connect(lambda: log("worker done"))
+            if window.thread is not None:
+                window.thread.finished.connect(lambda: log("thread finished"))
             QTimer.singleShot(100, check)
         except Exception as exc:
             fail(exc)

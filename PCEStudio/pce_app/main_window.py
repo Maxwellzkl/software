@@ -99,6 +99,8 @@ DEFAULT_SOURCE_RANGE_CHOICE = "FIXED:2"
 DEFAULT_VOLTAGE_RANGE_CHOICE = "FIXED:2"
 DEFAULT_CURRENT_RANGE_CHOICE = "AUTO:1e-07"
 DEFAULT_MEASURE_SPEED = "NORMAL"
+DEFAULT_TRIGGER_MODE = "AUTO"
+DEFAULT_TRIGGER_PERIOD_S = 0.1
 VOLTAGE_RANGES = (
     (0.2, "0.2 V"),
     (2.0, "2 V"),
@@ -436,21 +438,34 @@ class MainWindow(QMainWindow):
         self.compliance_spin = _double_spin(1e-9, 210.0, 0.1, 9)
 
         self.source_range_combo = NoWheelComboBox()
+        self.source_range_combo.currentIndexChanged.connect(
+            self._source_range_changed
+        )
 
         self.measure_voltage_check = QCheckBox("启用")
         self.measure_voltage_check.setChecked(True)
         self.voltage_range_combo = NoWheelComboBox()
         self._populate_measure_range(self.voltage_range_combo, VOLTAGE_RANGES)
+        self.voltage_range_follow_label = QLabel("随源")
+        self.voltage_range_follow_label.setStyleSheet("color: #637782; font-size: 11px;")
+        self.voltage_range_follow_label.setToolTip("该量程跟随 Source Range")
         voltage_row = self._measure_range_row(
-            self.measure_voltage_check, self.voltage_range_combo
+            self.measure_voltage_check,
+            self.voltage_range_combo,
+            self.voltage_range_follow_label,
         )
 
         self.measure_current_check = QCheckBox("启用")
         self.measure_current_check.setChecked(True)
         self.current_range_combo = NoWheelComboBox()
         self._populate_measure_range(self.current_range_combo, CURRENT_RANGES)
+        self.current_range_follow_label = QLabel("随源")
+        self.current_range_follow_label.setStyleSheet("color: #637782; font-size: 11px;")
+        self.current_range_follow_label.setToolTip("该量程跟随 Source Range")
         current_row = self._measure_range_row(
-            self.measure_current_check, self.current_range_combo
+            self.measure_current_check,
+            self.current_range_combo,
+            self.current_range_follow_label,
         )
         self.measure_delay_spin = _double_spin(
             0.0, 1000.0, DEFAULT_MEASURE_DELAY_S, 6, " s"
@@ -469,11 +484,48 @@ class MainWindow(QMainWindow):
         speed_layout.addWidget(self.measure_speed_combo, 1)
         speed_layout.addWidget(self.nplc_spin, 1)
         self.irradiance_spin = _double_spin(0.000001, 100000.0, 100.0, 6, " mW/cm²")
-        self.trigger_label = QLabel("Auto（内部自动触发）")
-        self.trigger_label.setToolTip("B2902B 使用自动内部触发推进每个扫描点。")
+        self.trigger_mode_combo = NoWheelComboBox()
+        self.trigger_mode_combo.addItem("Auto（内部自动）", "AUTO")
+        self.trigger_mode_combo.addItem("Timer（固定周期）", "TIMER")
+        self.minimum_auto_trigger_check = QCheckBox("指定最小 Auto Trigger Period")
+        self.trigger_period_spin = _double_spin(
+            2e-5, 100000.0, DEFAULT_TRIGGER_PERIOD_S, 6, " s"
+        )
+        self.trigger_period_spin.setSingleStep(0.01)
+        self.estimated_period_label = QLabel()
+        self.estimated_period_label.setWordWrap(True)
+        self.estimated_period_label.setToolTip(
+            "按 50 Hz 电网频率、当前 NPLC 和延迟估算；自动量程切换可能增加实际时间。"
+        )
+        trigger_row = QWidget()
+        trigger_layout = QGridLayout(trigger_row)
+        trigger_layout.setContentsMargins(0, 0, 0, 0)
+        trigger_layout.setHorizontalSpacing(6)
+        trigger_layout.setVerticalSpacing(3)
+        trigger_layout.addWidget(self.trigger_mode_combo, 0, 0, 1, 2)
+        trigger_layout.addWidget(self.minimum_auto_trigger_check, 1, 0, 1, 2)
+        trigger_layout.addWidget(QLabel("Period"), 2, 0)
+        trigger_layout.addWidget(self.trigger_period_spin, 2, 1)
+        trigger_layout.addWidget(self.estimated_period_label, 3, 0, 1, 2)
 
         self.measure_voltage_check.toggled.connect(self._update_measure_range_enabled)
         self.measure_current_check.toggled.connect(self._update_measure_range_enabled)
+        self.trigger_mode_combo.currentIndexChanged.connect(
+            self._update_trigger_controls
+        )
+        self.minimum_auto_trigger_check.toggled.connect(
+            self._update_trigger_controls
+        )
+        for widget in (
+            self.source_delay_spin,
+            self.measure_delay_spin,
+            self.nplc_spin,
+            self.trigger_period_spin,
+        ):
+            widget.valueChanged.connect(self._update_trigger_controls)
+        self.measure_speed_combo.currentIndexChanged.connect(
+            self._update_trigger_controls
+        )
 
         info_button = QToolButton()
         info_button.setText("i  参数说明")
@@ -496,13 +548,14 @@ class MainWindow(QMainWindow):
         layout.addRow("Current Measure", current_row)
         layout.addRow("Measure Delay", self.measure_delay_spin)
         layout.addRow("Measure Speed", speed_row)
-        layout.addRow("Trigger", self.trigger_label)
+        layout.addRow("Trigger", trigger_row)
         layout.addRow("光功率密度", self.irradiance_spin)
         self._source_mode_changed()
         self._set_combo_data(self.source_range_combo, DEFAULT_SOURCE_RANGE_CHOICE)
         self._set_combo_data(self.voltage_range_combo, DEFAULT_VOLTAGE_RANGE_CHOICE)
         self._set_combo_data(self.current_range_combo, DEFAULT_CURRENT_RANGE_CHOICE)
         self._measure_speed_changed()
+        self._update_trigger_controls()
         return group
 
     @staticmethod
@@ -540,6 +593,25 @@ class MainWindow(QMainWindow):
         index = self.source_range_combo.findData(previous)
         self.source_range_combo.setCurrentIndex(index if index >= 0 else 0)
         self.source_range_combo.blockSignals(False)
+        self._source_range_changed()
+
+    def _source_range_changed(self) -> None:
+        if not self.source_range_combo.currentData():
+            return
+        source_mode = self.source_mode_combo.currentData()
+        source_range_mode, source_range = self._range_selection(
+            self.source_range_combo
+        )
+        target = (
+            self.voltage_range_combo
+            if source_mode == "VOLT"
+            else self.current_range_combo
+        )
+        self._set_combo_data(
+            target,
+            self._range_key(source_range_mode, source_range),
+        )
+        self._update_measure_range_enabled()
 
     @staticmethod
     def _range_selection(combo: QComboBox) -> tuple[str, float]:
@@ -547,13 +619,17 @@ class MainWindow(QMainWindow):
         return mode, float(raw_value)
 
     def _measure_range_row(
-        self, enabled: QCheckBox, range_combo: QComboBox
+        self,
+        enabled: QCheckBox,
+        range_combo: QComboBox,
+        follow_label: QLabel,
     ) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(enabled)
         layout.addWidget(range_combo, 1)
+        layout.addWidget(follow_label)
         return row
 
     def _output_group(self) -> QGroupBox:
@@ -730,6 +806,18 @@ class MainWindow(QMainWindow):
         self.current_range_combo.setEnabled(
             self.measure_current_check.isChecked() and source_mode != "CURR"
         )
+        self.voltage_range_follow_label.setVisible(source_mode == "VOLT")
+        self.current_range_follow_label.setVisible(source_mode == "CURR")
+        self.voltage_range_combo.setToolTip(
+            "电压源模式下由 Source Range 决定；电流源模式下可独立设置。"
+            if source_mode == "VOLT"
+            else "电压测量量程可独立设置。"
+        )
+        self.current_range_combo.setToolTip(
+            "电流源模式下由 Source Range 决定；电压源模式下可独立设置。"
+            if source_mode == "CURR"
+            else "电流测量量程可独立设置。"
+        )
 
     def _measure_speed_changed(self) -> None:
         manual = self.measure_speed_combo.currentData() == "MANUAL"
@@ -741,6 +829,34 @@ class MainWindow(QMainWindow):
             value = "量程自动决定" if speed == "AUTO" else f"{SPEED_NPLC[speed]:g} PLC"
             self.nplc_spin.setToolTip(f"当前档位对应：{value}")
 
+    def _update_trigger_controls(self) -> None:
+        if not hasattr(self, "trigger_mode_combo"):
+            return
+        auto_mode = self.trigger_mode_combo.currentData() == "AUTO"
+        if not auto_mode and self.minimum_auto_trigger_check.isChecked():
+            self.minimum_auto_trigger_check.blockSignals(True)
+            self.minimum_auto_trigger_check.setChecked(False)
+            self.minimum_auto_trigger_check.blockSignals(False)
+        self.minimum_auto_trigger_check.setEnabled(auto_mode)
+        period_enabled = not auto_mode or self.minimum_auto_trigger_check.isChecked()
+        self.trigger_period_spin.setEnabled(period_enabled)
+
+        speed = str(self.measure_speed_combo.currentData())
+        nplc = 1.0 if speed == "AUTO" else SPEED_NPLC.get(
+            speed, self.nplc_spin.value()
+        )
+        estimated = max(
+            self.source_delay_spin.value(),
+            self.measure_delay_spin.value() + nplc / 50.0,
+        ) + 0.001
+        text = f"预计点周期 ≈ {estimated:.6g} s（50 Hz）"
+        if auto_mode and self.minimum_auto_trigger_check.isChecked():
+            effective = max(self.trigger_period_spin.value(), estimated)
+            text += f"；有效下限 ≈ {effective:.6g} s"
+        elif not auto_mode and self.trigger_period_spin.value() < estimated:
+            text += "；⚠ Timer 小于估算值"
+        self.estimated_period_label.setText(text)
+
     def _show_parameter_help(self) -> None:
         QMessageBox.information(
             self,
@@ -751,10 +867,16 @@ class MainWindow(QMainWindow):
             "Compliance：电压源模式为限流 A；电流源模式为限压 V。\n\n"
             "Source Range：Auto 自动选择；固定档必须覆盖 Start 和 Stop。\n\n"
             "Measure Range：Auto 自动选择；Fixed 固定量程；Limited 为自动量程，"
-            "但不会切换到低于所选值的量程。源量对应的测量 Range 由 Source Range 决定。\n\n"
+            "但不会切换到低于所选值的量程。电压源模式的 Voltage Measure Range "
+            "跟随 Source Range；电流源模式的 Current Measure Range 同理。\n\n"
             "Measure Speed：Auto 由量程决定；Short=0.01 PLC，Medium=0.1 PLC，"
             "Normal=1 PLC，Long=10 PLC；Manual 可自定义 0.0001-100 PLC。\n\n"
-            "Trigger：固定为 Auto，使用 B2902B 自动内部触发推进扫描点。\n\n"
+            "Source Delay：收到每个点的触发后，等待该时间才更新源输出。\n"
+            "Measure Delay：收到同一触发后，等待该时间才开始采样。通常 Source "
+            "Delay 设为 0，用 Measure Delay 给器件留出稳定时间。\n\n"
+            "Trigger：Auto 使用 B2902B 自动内部触发；Timer 按固定 Period 推进。"
+            "Auto 勾选‘指定最小周期’时，若预计周期已满足下限则保留 Auto；"
+            "否则按用户下限采用 Timer。\n\n"
             "光功率密度：Light 数据计算 PCE 时使用，单位 mW/cm²。",
         )
 
@@ -854,6 +976,11 @@ class MainWindow(QMainWindow):
             nplc_auto=measure_speed == "AUTO",
             measure_speed=measure_speed,
             nplc=nplc,
+            trigger_mode=str(self.trigger_mode_combo.currentData()),
+            minimum_auto_trigger_period_enabled=(
+                self.minimum_auto_trigger_check.isChecked()
+            ),
+            trigger_period_s=self.trigger_period_spin.value(),
             irradiance_mw_cm2=self.irradiance_spin.value(),
         )
         settings.validate()
@@ -1192,6 +1319,11 @@ class MainWindow(QMainWindow):
             "measure_current": self.measure_current_check.isChecked(),
             "measure_speed": self.measure_speed_combo.currentData(),
             "manual_nplc": self.nplc_spin.value(),
+            "trigger_mode": self.trigger_mode_combo.currentData(),
+            "minimum_auto_trigger_period": (
+                self.minimum_auto_trigger_check.isChecked()
+            ),
+            "trigger_period": self.trigger_period_spin.value(),
         }
         for key, value in values.items():
             self.app_settings.setValue(key, value)
@@ -1218,6 +1350,9 @@ class MainWindow(QMainWindow):
         self._set_combo_data(self.voltage_range_combo, DEFAULT_VOLTAGE_RANGE_CHOICE)
         self._set_combo_data(self.current_range_combo, DEFAULT_CURRENT_RANGE_CHOICE)
         self._set_combo_data(self.measure_speed_combo, DEFAULT_MEASURE_SPEED)
+        self._set_combo_data(self.trigger_mode_combo, DEFAULT_TRIGGER_MODE)
+        self.minimum_auto_trigger_check.setChecked(False)
+        self.trigger_period_spin.setValue(DEFAULT_TRIGGER_PERIOD_S)
         self.measure_voltage_check.setChecked(True)
         self.measure_current_check.setChecked(True)
         for spin, key, default in (
@@ -1237,6 +1372,7 @@ class MainWindow(QMainWindow):
         self._set_combo_data(self.voltage_range_combo, DEFAULT_VOLTAGE_RANGE_CHOICE)
         self._set_combo_data(self.current_range_combo, DEFAULT_CURRENT_RANGE_CHOICE)
         self._measure_speed_changed()
+        self._update_trigger_controls()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.worker is not None:

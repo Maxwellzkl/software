@@ -13,7 +13,7 @@
 - 正扫 + 反扫使用一次连续 LIST 扫描，转折点只采集一次并由两条曲线共享；中途不再读取数据、关闭输出或重新 `INIT`，避免在 Stop 电压处出现通信停顿。
 - 长时间 LIST 扫描通过 VISA 状态字节轮询等待完成，避免 Normal/Long 档在点数较多时被固定通信超时误判为失败。
 - 大点数 LIST 波形按 100 点分块写入并用 `:LIST:*:POIN?` 核对实际装载点数，避免 801 点等长列表因单条 SCPI 命令过长而退化为单点扫描。
-- 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、两种测量量程、Measure Delay 和 Measure Speed；所有数值参数在界面显示对应单位。
+- 可调参数包括 Source Function、V/I 模式、DC、Source Delay、Start、Stop、VAR1 Count、Compliance、源量程、Voltage/Current Measure Range、Measure Delay、Measure Speed，以及 Auto、Timer、Auto + 最小周期三种触发方式；源模式同类的测量量程按 B2902B 规则跟随 Source Range，其余数值参数在界面显示对应单位。
 - 所有下拉框和数值输入框均禁止用鼠标滚轮改值；鼠标滚轮只滚动参数页面，避免悬停误操作。
 - Measure Speed 提供 Auto、Short、Medium、Normal、Long、Manual 六档，默认 Normal；Manual 可自定义 NPLC。
 - 每次启动采用固定安全默认值：电压源模式、Source Range Fixed 2 V、Voltage Measure Fixed 2 V、Current Measure Auto、Normal、Measure Delay 0.05 s、Source Delay 0 s、Trigger Auto、VAR1 Count 801；输出目录、器件配置等仍会持久保存。

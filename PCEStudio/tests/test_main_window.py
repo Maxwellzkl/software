@@ -38,11 +38,17 @@ def test_parameter_controls_and_output_directory_picker(monkeypatch, tmp_path) -
         window.current_range_combo.setCurrentIndex(
             window.current_range_combo.findData("LIMITED:1e-06")
         )
+        window.source_range_combo.setCurrentIndex(
+            window.source_range_combo.findData("FIXED:20")
+        )
         settings = window._sweep_settings()
         assert settings.measure_speed == "NORMAL"
         assert settings.nplc == 1.0
         assert settings.current_range_mode == "LIMITED"
         assert settings.current_range == 1e-6
+        assert settings.voltage_range_mode == "FIXED"
+        assert settings.voltage_range == 20.0
+        assert not window.voltage_range_combo.isEnabled()
         assert window.compliance_spin.suffix() == " A"
         assert window.output_browse_button.text() == "选择…"
 
@@ -55,6 +61,68 @@ def test_parameter_controls_and_output_directory_picker(monkeypatch, tmp_path) -
         window.output_browse_button.click()
         application.processEvents()
         assert window.output_edit.text() == str(selected_dir)
+    finally:
+        window.close()
+
+
+def test_voltage_measure_range_follows_source_range_and_trigger_is_adjustable(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("PCE_STUDIO_DATA_DIR", str(tmp_path / "appdata"))
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path))
+    application = create_application()
+    window = MainWindow()
+    try:
+        assert window.source_mode_combo.currentData() == "VOLT"
+        assert not window.voltage_range_combo.isEnabled()
+        window.source_range_combo.setCurrentIndex(
+            window.source_range_combo.findData("FIXED:20")
+        )
+        assert window.voltage_range_combo.currentData() == "FIXED:20"
+
+        window.source_mode_combo.setCurrentIndex(
+            window.source_mode_combo.findData("CURR")
+        )
+        assert window.voltage_range_combo.isEnabled()
+        assert not window.current_range_combo.isEnabled()
+        window.voltage_range_combo.setCurrentIndex(
+            window.voltage_range_combo.findData("LIMITED:2")
+        )
+        settings = window._sweep_settings()
+        assert settings.voltage_range_mode == "LIMITED"
+        assert settings.voltage_range == 2.0
+
+        window.measure_voltage_check.setChecked(False)
+        assert not window.voltage_range_combo.isEnabled()
+        window.measure_voltage_check.setChecked(True)
+        assert window.voltage_range_combo.isEnabled()
+
+        assert window.trigger_mode_combo.currentData() == "AUTO"
+        assert not window.minimum_auto_trigger_check.isChecked()
+        assert not window.trigger_period_spin.isEnabled()
+
+        window.minimum_auto_trigger_check.setChecked(True)
+        assert window.trigger_period_spin.isEnabled()
+        auto_min_settings = window._sweep_settings()
+        assert auto_min_settings.trigger_mode == "AUTO"
+        assert auto_min_settings.minimum_auto_trigger_period_enabled
+        assert auto_min_settings.trigger_period_s == 0.1
+        window.trigger_period_spin.setValue(1.0)
+        assert "有效下限 ≈ 1" in window.estimated_period_label.text()
+        window.trigger_period_spin.setValue(0.1)
+
+        window.trigger_mode_combo.setCurrentIndex(
+            window.trigger_mode_combo.findData("TIMER")
+        )
+        assert not window.minimum_auto_trigger_check.isEnabled()
+        assert not window.minimum_auto_trigger_check.isChecked()
+        assert window.trigger_period_spin.isEnabled()
+        window.trigger_period_spin.setValue(0.25)
+        timer_settings = window._sweep_settings()
+        assert timer_settings.trigger_mode == "TIMER"
+        assert timer_settings.trigger_period_s == 0.25
+        assert "预计点周期" in window.estimated_period_label.text()
     finally:
         window.close()
 
@@ -76,6 +144,9 @@ def test_requested_startup_defaults_override_previous_scan_settings(
     previous.setValue("measure_speed", "SHORT")
     previous.setValue("measure_voltage", False)
     previous.setValue("measure_current", False)
+    previous.setValue("trigger_mode", "TIMER")
+    previous.setValue("minimum_auto_trigger_period", True)
+    previous.setValue("trigger_period", 5.0)
     previous.sync()
 
     application = create_application()
@@ -96,7 +167,10 @@ def test_requested_startup_defaults_override_previous_scan_settings(
         assert settings.nplc == 1.0
         assert settings.measure_voltage
         assert settings.measure_current
-        assert window.trigger_label.text().startswith("Auto")
+        assert settings.trigger_mode == "AUTO"
+        assert not settings.minimum_auto_trigger_period_enabled
+        assert settings.trigger_period_s == 0.1
+        assert not window.trigger_period_spin.isEnabled()
         assert not window.windowIcon().isNull()
         assert not application.windowIcon().isNull()
     finally:
